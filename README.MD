@@ -28,6 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
   - Trojan (TLS)
   - VMess
   - VLESS (TLS)
+  - VLESS-Reality (auto-generates X25519 keypair, shows public key + short ID for clients)
   - Hysteria2 (QUIC)
   - TUIC v5 (QUIC)
 

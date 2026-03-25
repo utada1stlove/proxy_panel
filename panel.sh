@@ -418,6 +418,47 @@ add_vless() {
     print_url "$port" "VLESS" "$url"
 }
 
+add_vless_reality() {
+    header "Add VLESS-Reality proxy"
+    local port; port="$(prompt_port)"
+    local uuid; uuid="$(prompt_uuid)"
+    local sni
+    read -rp "  SNI hostname (e.g. www.apple.com): " sni
+    sni="${sni:-www.apple.com}"
+
+    info "Generating Reality keypair ..."
+    local keypair_output private_key public_key
+    keypair_output="$("$SHOES_BIN" generate-reality-keypair)"
+    private_key="$(echo "$keypair_output" | awk '/private key:/{print $NF}')"
+    public_key="$(echo "$keypair_output" | awk '/public key:/{print $NF}')"
+
+    local short_id
+    short_id="$(openssl rand -hex 8 2>/dev/null || cat /dev/urandom | tr -dc 'a-f0-9' | head -c 16)"
+
+    info "Public Key (share with clients): $public_key"
+    info "Short ID   (share with clients): $short_id"
+
+    local block="- address: 0.0.0.0:${port}
+  protocol:
+    type: tls
+    reality_targets:
+      \"${sni}\":
+        private_key: \"${private_key}\"
+        short_ids: [\"${short_id}\", \"\"]
+        dest: \"${sni}:443\"
+        protocol:
+          type: vless
+          user_id: ${uuid}
+          udp_enabled: true"
+    add_listener "$block"
+
+    local ip; ip="$(get_server_ip)"
+    local url="vless://${uuid}@${ip}:${port}?security=reality&pbk=${public_key}&sid=${short_id}&sni=${sni}&flow=xtls-rprx-vision&type=tcp"
+    save_url "$port" "VLESS-Reality" "$url"
+    info "VLESS-Reality added on port $port."
+    print_url "$port" "VLESS-Reality" "$url"
+}
+
 add_hysteria2() {
     header "Add Hysteria2 proxy"
     local port; port="$(prompt_port)"
@@ -475,6 +516,7 @@ menu_add_protocol() {
         "Trojan (TLS)"
         "VMess"
         "VLESS (TLS)"
+        "VLESS-Reality"
         "Hysteria2 (QUIC)"
         "TUIC v5 (QUIC)"
         "Back"
@@ -488,6 +530,7 @@ menu_add_protocol() {
             "Trojan (TLS)")      add_trojan;          break ;;
             "VMess")             add_vmess;           break ;;
             "VLESS (TLS)")       add_vless;           break ;;
+            "VLESS-Reality")     add_vless_reality;   break ;;
             "Hysteria2 (QUIC)")  add_hysteria2;       break ;;
             "TUIC v5 (QUIC)")    add_tuic;            break ;;
             "Back")              break ;;
