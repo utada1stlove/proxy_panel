@@ -20,6 +20,9 @@ warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
 error()   { echo -e "${RED}[x]${RESET} $*" >&2; }
 header()  { echo -e "\n${BOLD}${CYAN}$*${RESET}\n"; }
 
+# ─── TTY fix: when piped (curl | bash), stdin is the pipe not the terminal ────
+[[ -t 0 ]] || exec < /dev/tty
+
 # ─── Root guard ───────────────────────────────────────────────────────────────
 require_root() {
     [[ $EUID -eq 0 ]] || { error "This script must be run as root."; exit 1; }
