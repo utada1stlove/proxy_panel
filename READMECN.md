@@ -29,6 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
   - VMess
   - VLESS（TLS）
   - VLESS-Reality（自动生成 X25519 密钥对，显示公钥与短 ID 供客户端使用）
+  - ShadowTLS v3（封装 Shadowsocks，伪装成真实 TLS 服务器）
   - Hysteria2（QUIC）
   - TUIC v5（QUIC）
 
