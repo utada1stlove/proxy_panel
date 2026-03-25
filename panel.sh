@@ -307,6 +307,33 @@ add_hysteria2() {
     info "Hysteria2 added on port $port."
 }
 
+add_shadowsocks2022() {
+    header "Add Shadowsocks 2022 proxy"
+    local port; port="$(prompt_port)"
+    local cipher
+    echo "  Cipher options:"
+    echo "    1) 2022-blake3-aes-128-gcm"
+    echo "    2) 2022-blake3-aes-256-gcm"
+    echo "    3) 2022-blake3-chacha20-ietf-poly1305"
+    read -rp "  Cipher [2022-blake3-aes-256-gcm]: " cipher
+    cipher="${cipher:-2022-blake3-aes-256-gcm}"
+    case "$cipher" in
+        2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-ietf-poly1305) ;;
+        *) warn "Unrecognised cipher; proceeding anyway." ;;
+    esac
+    info "Generating password for $cipher ..."
+    local pass
+    pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$cipher")"
+    info "Generated password: $pass"
+    local block="- address: 0.0.0.0:${port}
+  protocol:
+    type: shadowsocks
+    cipher: ${cipher}
+    password: ${pass}"
+    add_listener "$block"
+    info "Shadowsocks 2022 ($cipher) added on port $port."
+}
+
 add_tuic() {
     header "Add TUIC v5 proxy"
     local port; port="$(prompt_port)"
@@ -335,6 +362,7 @@ menu_add_protocol() {
         "HTTP"
         "SOCKS5"
         "Shadowsocks"
+        "Shadowsocks 2022"
         "Trojan (TLS)"
         "VMess"
         "VLESS (TLS)"
@@ -346,7 +374,8 @@ menu_add_protocol() {
         case "$choice" in
             "HTTP")              add_http;       break ;;
             "SOCKS5")           add_socks5;     break ;;
-            "Shadowsocks")      add_shadowsocks; break ;;
+            "Shadowsocks")      add_shadowsocks;     break ;;
+            "Shadowsocks 2022") add_shadowsocks2022; break ;;
             "Trojan (TLS)")     add_trojan;     break ;;
             "VMess")            add_vmess;      break ;;
             "VLESS (TLS)")      add_vless;      break ;;
