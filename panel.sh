@@ -325,7 +325,7 @@ add_shadowsocks2022() {
     esac
     info "Generating password for $cipher ..."
     local pass
-    pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$cipher")"
+    pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$cipher" | awk '/^Password:/{print $2}')"
     info "Generated password: $pass"
     local block="- address: 0.0.0.0:${port}
   protocol:
