@@ -513,14 +513,46 @@ add_shadowtls() {
     read -rp "  Handshake SNI (real TLS server to impersonate, e.g. www.apple.com): " sni
     sni="${sni:-www.apple.com}"
 
-    info "Inner protocol: Shadowsocks (auto-generated password)"
-    local inner_pass; inner_pass="$(openssl rand -base64 16)"
+    # Choose inner Shadowsocks variant
+    echo "  Inner protocol:"
+    echo "    1) Shadowsocks (chacha20-ietf-poly1305)"
+    echo "    2) Shadowsocks 2022 (blake3 ciphers)"
+    local inner_choice
+    read -rp "  Choice [1]: " inner_choice
+
+    local inner_cipher inner_pass
     local inner_port=$(( port + 1 ))
+
+    case "${inner_choice:-1}" in
+        2)
+            echo "    Inner SS2022 cipher:"
+            echo "      1) 2022-blake3-aes-128-gcm"
+            echo "      2) 2022-blake3-aes-256-gcm"
+            echo "      3) 2022-blake3-chacha20-ietf-poly1305"
+            local cipher_choice
+            read -rp "    Cipher [2]: " cipher_choice
+            case "${cipher_choice:-2}" in
+                1) inner_cipher="2022-blake3-aes-128-gcm" ;;
+                2|"") inner_cipher="2022-blake3-aes-256-gcm" ;;
+                3) inner_cipher="2022-blake3-chacha20-ietf-poly1305" ;;
+                *) inner_cipher="2022-blake3-aes-256-gcm" ;;
+            esac
+            info "Generating SS2022 password for $inner_cipher ..."
+            inner_pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$inner_cipher" | awk '/^Password:/{print $2}')"
+            ;;
+        *)
+            inner_cipher="chacha20-ietf-poly1305"
+            inner_pass="$(openssl rand -base64 16)"
+            ;;
+    esac
+
+    info "Inner cipher : $inner_cipher"
+    info "Inner password: $inner_pass"
 
     local inner_block="- address: 127.0.0.1:${inner_port}
   protocol:
     type: shadowsocks
-    cipher: chacha20-ietf-poly1305
+    cipher: ${inner_cipher}
     password: ${inner_pass}"
     add_listener "$inner_block"
 
@@ -528,23 +560,24 @@ add_shadowtls() {
   protocol:
     type: tls
     shadowtls_targets:
-      "${sni}":
-        password: "${pass}"
+      \"${sni}\":
+        password: \"${pass}\"
         handshake:
-          address: "${sni}:443"
+          address: \"${sni}:443\"
         protocol:
           type: shadowsocks
-          cipher: chacha20-ietf-poly1305
+          cipher: ${inner_cipher}
           password: ${inner_pass}"
     add_listener "$block"
 
     local ip; ip="$(get_server_ip)"
-    local url="shadowtls://v3@${ip}:${port}?password=${pass}&sni=${sni}&inner-ss-port=${inner_port}&inner-ss-pass=${inner_pass}&inner-cipher=chacha20-ietf-poly1305"
+    local url="shadowtls://v3@${ip}:${port}?password=${pass}&sni=${sni}&inner-ss-port=${inner_port}&inner-ss-pass=${inner_pass}&inner-cipher=${inner_cipher}"
     save_url "$port" "ShadowTLS-v3" "$url"
     info "ShadowTLS v3 added on port $port."
     info "  Outer password : $pass"
     info "  Handshake SNI  : $sni"
     info "  Inner SS port  : $inner_port"
+    info "  Inner SS cipher: $inner_cipher"
     info "  Inner SS pass  : $inner_pass"
     print_url "$port" "ShadowTLS-v3" "$url"
 }
