@@ -21,7 +21,13 @@ error()   { echo -e "${RED}[x]${RESET} $*" >&2; }
 header()  { echo -e "\n${BOLD}${CYAN}$*${RESET}\n"; }
 
 # ─── TTY fix: when piped (curl | bash), stdin is the pipe not the terminal ────
-[[ -t 0 ]] || exec < /dev/tty
+if [[ ! -t 0 ]]; then
+    exec < /dev/tty 2>/dev/null || {
+        echo "No TTY available. Please run:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh -o /tmp/panel.sh && bash /tmp/panel.sh"
+        exit 1
+    }
+fi
 
 # ─── Root guard ───────────────────────────────────────────────────────────────
 require_root() {
