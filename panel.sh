@@ -198,12 +198,11 @@ list_listeners() {
     [[ $found -eq 1 ]] || warn "No listeners found in $SHOES_CONFIG"
 }
 
-remove_listener() {
-    local port="$1"
-    init_config
-    local pattern="^- address: 0\\.0\\.0\\.0:${port}$"
+remove_listener_by_address() {
+    # Remove a single "- address: ADDR:PORT" block from config
+    local addr_pattern="$1"
     local tmpfile; tmpfile="$(mktemp)"
-    awk -v pat="$pattern" '
+    awk -v pat="$addr_pattern" '
         /^- address:/ {
             if (buffer != "" && !skip) printf "%s", buffer
             skip = ($0 ~ pat)
@@ -218,8 +217,37 @@ remove_listener() {
         }
     ' "$SHOES_CONFIG" > "$tmpfile"
     mv "$tmpfile" "$SHOES_CONFIG"
+}
+
+remove_listener() {
+    local port="$1"
+    init_config
+
+    # Check if this is a ShadowTLS listener — find inner port from saved URL
+    local inner_port=""
+    if [[ -f "$SHOES_URLS" ]]; then
+        local url_line
+        url_line="$(grep "^${port}|ShadowTLS" "$SHOES_URLS" 2>/dev/null || true)"
+        if [[ -n "$url_line" ]]; then
+            inner_port="$(echo "$url_line" | sed -n 's/.*inner-ss-port=\([0-9]*\).*/\1/p')"
+        fi
+    fi
+    # Fallback: check if port+1 is a 127.0.0.1 inner listener
+    if [[ -z "$inner_port" ]]; then
+        local candidate=$(( port + 1 ))
+        if grep -q "^- address: 127\.0\.0\.1:${candidate}$" "$SHOES_CONFIG" 2>/dev/null; then
+            inner_port="$candidate"
+        fi
+    fi
+
+    remove_listener_by_address "^- address: 0\\.0\\.0\\.0:${port}$"
     remove_url "$port"
-    info "Removed listener on port $port (if it existed)."
+    info "Removed listener on port $port."
+
+    if [[ -n "$inner_port" ]]; then
+        remove_listener_by_address "^- address: 127\\.0\\.0\\.1:${inner_port}$"
+        info "Removed associated inner listener on 127.0.0.1:$inner_port."
+    fi
 }
 
 # ─── Protocol wizards ─────────────────────────────────────────────────────────
