@@ -7,7 +7,7 @@
 ## 一键运行
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh)
+curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh | bash
 ```
 
 > 需要 root 权限，建议在 `sudo -i` 或 `su -` 环境下执行。
