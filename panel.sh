@@ -505,6 +505,50 @@ add_tuic() {
     print_url "$port" "TUIC v5" "$url"
 }
 
+add_shadowtls() {
+    header "Add ShadowTLS v3 proxy"
+    local port; port="$(prompt_port)"
+    local pass; pass="$(prompt_password)"
+    local sni
+    read -rp "  Handshake SNI (real TLS server to impersonate, e.g. www.apple.com): " sni
+    sni="${sni:-www.apple.com}"
+
+    info "Inner protocol: Shadowsocks (auto-generated password)"
+    local inner_pass; inner_pass="$(openssl rand -base64 16)"
+    local inner_port=$(( port + 1 ))
+
+    local inner_block="- address: 127.0.0.1:${inner_port}
+  protocol:
+    type: shadowsocks
+    cipher: chacha20-ietf-poly1305
+    password: ${inner_pass}"
+    add_listener "$inner_block"
+
+    local block="- address: 0.0.0.0:${port}
+  protocol:
+    type: tls
+    shadowtls_targets:
+      "${sni}":
+        password: "${pass}"
+        handshake:
+          address: "${sni}:443"
+        protocol:
+          type: shadowsocks
+          cipher: chacha20-ietf-poly1305
+          password: ${inner_pass}"
+    add_listener "$block"
+
+    local ip; ip="$(get_server_ip)"
+    local url="shadowtls://v3@${ip}:${port}?password=${pass}&sni=${sni}&inner-ss-port=${inner_port}&inner-ss-pass=${inner_pass}&inner-cipher=chacha20-ietf-poly1305"
+    save_url "$port" "ShadowTLS-v3" "$url"
+    info "ShadowTLS v3 added on port $port."
+    info "  Outer password : $pass"
+    info "  Handshake SNI  : $sni"
+    info "  Inner SS port  : $inner_port"
+    info "  Inner SS pass  : $inner_pass"
+    print_url "$port" "ShadowTLS-v3" "$url"
+}
+
 # ─── Add protocol sub-menu ────────────────────────────────────────────────────
 menu_add_protocol() {
     header "Add Protocol"
@@ -517,6 +561,7 @@ menu_add_protocol() {
         "VMess"
         "VLESS (TLS)"
         "VLESS-Reality"
+        "ShadowTLS v3"
         "Hysteria2 (QUIC)"
         "TUIC v5 (QUIC)"
         "Back"
@@ -530,7 +575,8 @@ menu_add_protocol() {
             "Trojan (TLS)")      add_trojan;          break ;;
             "VMess")             add_vmess;           break ;;
             "VLESS (TLS)")       add_vless;           break ;;
-            "VLESS-Reality")     add_vless_reality;   break ;;
+            "VLESS-Reality")    add_vless_reality;   break ;;
+            "ShadowTLS v3")     add_shadowtls;       break ;;
             "Hysteria2 (QUIC)")  add_hysteria2;       break ;;
             "TUIC v5 (QUIC)")    add_tuic;            break ;;
             "Back")              break ;;
