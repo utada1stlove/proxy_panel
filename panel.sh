@@ -315,9 +315,11 @@ add_shadowsocks2022() {
     echo "    1) 2022-blake3-aes-128-gcm"
     echo "    2) 2022-blake3-aes-256-gcm"
     echo "    3) 2022-blake3-chacha20-ietf-poly1305"
-    read -rp "  Cipher [2022-blake3-aes-256-gcm]: " cipher
-    cipher="${cipher:-2022-blake3-aes-256-gcm}"
-    case "$cipher" in
+    read -rp "  Cipher [2]: " cipher
+    case "${cipher:-2}" in
+        1) cipher="2022-blake3-aes-128-gcm" ;;
+        2|"") cipher="2022-blake3-aes-256-gcm" ;;
+        3) cipher="2022-blake3-chacha20-ietf-poly1305" ;;
         2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-ietf-poly1305) ;;
         *) warn "Unrecognised cipher; proceeding anyway." ;;
     esac
