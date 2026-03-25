@@ -7,6 +7,7 @@ SHOES_VERSION="v0.2.7"
 SHOES_BIN="/usr/local/bin/shoes"
 SHOES_CONFIG_DIR="/etc/shoes"
 SHOES_CONFIG="$SHOES_CONFIG_DIR/config.yaml"
+SHOES_URLS="$SHOES_CONFIG_DIR/urls.conf"
 SHOES_SERVICE="/etc/systemd/system/shoes.service"
 GITHUB_RELEASE_BASE="https://github.com/cfal/shoes/releases/download/${SHOES_VERSION}"
 
@@ -29,10 +30,17 @@ detect_arch() {
     local machine
     machine="$(uname -m)"
     case "$machine" in
-        x86_64)  echo "x86_64-unknown-linux-musl" ;;
-        aarch64|arm64) echo "aarch64-unknown-linux-musl" ;;
+        x86_64)         echo "x86_64-unknown-linux-musl" ;;
+        aarch64|arm64)  echo "aarch64-unknown-linux-musl" ;;
         *) error "Unsupported architecture: $machine"; exit 1 ;;
     esac
+}
+
+# ─── Get public IP ────────────────────────────────────────────────────────────
+get_server_ip() {
+    curl -s4 --max-time 5 ifconfig.me 2>/dev/null \
+        || curl -s4 --max-time 5 icanhazip.com 2>/dev/null \
+        || hostname -I | awk '{print $1}'
 }
 
 # ─── Install / upgrade shoes binary ───────────────────────────────────────────
@@ -58,6 +66,31 @@ install_shoes() {
 
     info "shoes installed to $SHOES_BIN"
     "$SHOES_BIN" --version 2>/dev/null || true
+}
+
+# ─── Uninstall ────────────────────────────────────────────────────────────────
+uninstall_shoes() {
+    header "Uninstall shoes"
+    warn "This will stop and remove shoes, its service, and all configuration."
+    read -rp "  Are you sure? [y/N]: " confirm
+    [[ "${confirm,,}" == "y" ]] || { info "Cancelled."; return; }
+
+    if systemctl is-active --quiet shoes 2>/dev/null; then
+        systemctl stop shoes
+        info "Service stopped."
+    fi
+    if systemctl is-enabled --quiet shoes 2>/dev/null; then
+        systemctl disable shoes
+        info "Service disabled."
+    fi
+    [[ -f "$SHOES_SERVICE" ]] && { rm -f "$SHOES_SERVICE"; info "Removed $SHOES_SERVICE"; }
+    systemctl daemon-reload
+
+    [[ -f "$SHOES_BIN" ]] && { rm -f "$SHOES_BIN"; info "Removed $SHOES_BIN"; }
+    [[ -d "$SHOES_CONFIG_DIR" ]] && { rm -rf "$SHOES_CONFIG_DIR"; info "Removed $SHOES_CONFIG_DIR"; }
+
+    info "Uninstall complete."
+    exit 0
 }
 
 # ─── Systemd service ──────────────────────────────────────────────────────────
@@ -90,13 +123,40 @@ show_status() {
     systemctl status shoes --no-pager || true
 }
 
+# ─── URL store ────────────────────────────────────────────────────────────────
+# Format: PORT|LABEL|URL  (one entry per line)
+
+save_url() {
+    local port="$1" label="$2" url="$3"
+    mkdir -p "$SHOES_CONFIG_DIR"
+    # Remove any existing entry for this port first
+    if [[ -f "$SHOES_URLS" ]]; then
+        local tmp; tmp="$(mktemp)"
+        grep -v "^${port}|" "$SHOES_URLS" > "$tmp" || true
+        mv "$tmp" "$SHOES_URLS"
+    fi
+    echo "${port}|${label}|${url}" >> "$SHOES_URLS"
+}
+
+remove_url() {
+    local port="$1"
+    [[ -f "$SHOES_URLS" ]] || return
+    local tmp; tmp="$(mktemp)"
+    grep -v "^${port}|" "$SHOES_URLS" > "$tmp" || true
+    mv "$tmp" "$SHOES_URLS"
+}
+
+print_url() {
+    local port="$1" label="$2" url="$3"
+    echo -e "  ${BOLD}${label}${RESET}  →  ${CYAN}${url}${RESET}"
+}
+
 # ─── Config helpers ───────────────────────────────────────────────────────────
 init_config() {
     mkdir -p "$SHOES_CONFIG_DIR"
     [[ -f "$SHOES_CONFIG" ]] || { echo "# shoes config" > "$SHOES_CONFIG"; info "Created $SHOES_CONFIG"; }
 }
 
-# Append a raw YAML listener block (string) to the config
 add_listener() {
     local block="$1"
     init_config
@@ -104,30 +164,36 @@ add_listener() {
     echo "$block" >> "$SHOES_CONFIG"
 }
 
-# List configured listener ports by scanning address: lines
 list_listeners() {
     header "Configured listeners"
     init_config
     local found=0
     while IFS= read -r line; do
-        if [[ "$line" =~ ^-[[:space:]]*address:[[:space:]]*(.*) ]]; then
-            echo "  ${BASH_REMATCH[1]}"
+        if [[ "$line" =~ ^-[[:space:]]*address:[[:space:]]*0\.0\.0\.0:([0-9]+) ]]; then
+            local port="${BASH_REMATCH[1]}"
+            local url_entry=""
+            if [[ -f "$SHOES_URLS" ]]; then
+                url_entry="$(grep "^${port}|" "$SHOES_URLS" || true)"
+            fi
+            if [[ -n "$url_entry" ]]; then
+                local label url
+                label="$(echo "$url_entry" | cut -d'|' -f2)"
+                url="$(echo "$url_entry" | cut -d'|' -f3)"
+                print_url "$port" "$label" "$url"
+            else
+                echo "  0.0.0.0:${port}"
+            fi
             found=1
         fi
     done < "$SHOES_CONFIG"
     [[ $found -eq 1 ]] || warn "No listeners found in $SHOES_CONFIG"
 }
 
-# Remove a listener by port number (deletes the block starting with "- address: 0.0.0.0:<port>")
 remove_listener() {
     local port="$1"
     init_config
     local pattern="^- address: 0\\.0\\.0\\.0:${port}$"
-
-    # Build a new config without the matching block
-    # A block starts with "- address:" and ends before the next "- address:" or EOF
-    local tmpfile
-    tmpfile="$(mktemp)"
+    local tmpfile; tmpfile="$(mktemp)"
     awk -v pat="$pattern" '
         /^- address:/ {
             if (buffer != "" && !skip) printf "%s", buffer
@@ -136,15 +202,14 @@ remove_listener() {
             next
         }
         {
-            if (!skip) buffer = buffer $0 "\n"
-            else        buffer = buffer $0 "\n"   # still accumulate to drop on next header
+            buffer = buffer $0 "\n"
         }
         END {
             if (!skip && buffer != "") printf "%s", buffer
         }
     ' "$SHOES_CONFIG" > "$tmpfile"
-
     mv "$tmpfile" "$SHOES_CONFIG"
+    remove_url "$port"
     info "Removed listener on port $port (if it existed)."
 }
 
@@ -180,11 +245,12 @@ add_http() {
     local port; port="$(prompt_port)"
     local user pass
     read -rp "  Username (leave blank for no auth): " user
-    local block
+    local block url
     if [[ -z "$user" ]]; then
         block="- address: 0.0.0.0:${port}
   protocol:
     type: http"
+        url="http://$(get_server_ip):${port}"
     else
         pass="$(prompt_password)"
         block="- address: 0.0.0.0:${port}
@@ -193,9 +259,12 @@ add_http() {
     users:
       - username: ${user}
         password: ${pass}"
+        url="http://${user}:${pass}@$(get_server_ip):${port}"
     fi
     add_listener "$block"
+    save_url "$port" "HTTP" "$url"
     info "HTTP proxy added on port $port."
+    print_url "$port" "HTTP" "$url"
 }
 
 add_socks5() {
@@ -203,11 +272,12 @@ add_socks5() {
     local port; port="$(prompt_port)"
     local user pass
     read -rp "  Username (leave blank for no auth): " user
-    local block
+    local block url
     if [[ -z "$user" ]]; then
         block="- address: 0.0.0.0:${port}
   protocol:
     type: socks5"
+        url="socks5://$(get_server_ip):${port}"
     else
         pass="$(prompt_password)"
         block="- address: 0.0.0.0:${port}
@@ -216,9 +286,12 @@ add_socks5() {
     users:
       - username: ${user}
         password: ${pass}"
+        url="socks5://${user}:${pass}@$(get_server_ip):${port}"
     fi
     add_listener "$block"
+    save_url "$port" "SOCKS5" "$url"
     info "SOCKS5 proxy added on port $port."
+    print_url "$port" "SOCKS5" "$url"
 }
 
 add_shadowsocks() {
@@ -235,76 +308,11 @@ add_shadowsocks() {
     cipher: ${cipher}
     password: ${pass}"
     add_listener "$block"
+    local userinfo; userinfo="$(echo -n "${cipher}:${pass}" | base64 -w0)"
+    local url="ss://${userinfo}@$(get_server_ip):${port}"
+    save_url "$port" "Shadowsocks" "$url"
     info "Shadowsocks added on port $port."
-}
-
-add_trojan() {
-    header "Add Trojan proxy"
-    local port; port="$(prompt_port)"
-    local pass; pass="$(prompt_password)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
-  protocol:
-    type: tls
-    cert: ${cert}
-    key: ${key}
-    protocol:
-      type: trojan
-      password: ${pass}"
-    add_listener "$block"
-    info "Trojan added on port $port."
-}
-
-add_vmess() {
-    header "Add VMess proxy"
-    local port; port="$(prompt_port)"
-    local uuid; uuid="$(prompt_uuid)"
-    local block="- address: 0.0.0.0:${port}
-  protocol:
-    type: vmess
-    user_id: ${uuid}"
-    add_listener "$block"
-    info "VMess added on port $port."
-}
-
-add_vless() {
-    header "Add VLESS proxy"
-    local port; port="$(prompt_port)"
-    local uuid; uuid="$(prompt_uuid)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
-  protocol:
-    type: tls
-    cert: ${cert}
-    key: ${key}
-    protocol:
-      type: vless
-      user_id: ${uuid}"
-    add_listener "$block"
-    info "VLESS added on port $port."
-}
-
-add_hysteria2() {
-    header "Add Hysteria2 proxy"
-    local port; port="$(prompt_port)"
-    local pass; pass="$(prompt_password)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
-  transport: quic
-  quic_settings:
-    cert: ${cert}
-    key: ${key}
-  protocol:
-    type: hysteria2
-    password: ${pass}"
-    add_listener "$block"
-    info "Hysteria2 added on port $port."
+    print_url "$port" "Shadowsocks" "$url"
 }
 
 add_shadowsocks2022() {
@@ -333,7 +341,94 @@ add_shadowsocks2022() {
     cipher: ${cipher}
     password: ${pass}"
     add_listener "$block"
+    local userinfo; userinfo="$(echo -n "${cipher}:${pass}" | base64 -w0)"
+    local url="ss://${userinfo}@$(get_server_ip):${port}"
+    save_url "$port" "SS2022(${cipher})" "$url"
     info "Shadowsocks 2022 ($cipher) added on port $port."
+    print_url "$port" "SS2022(${cipher})" "$url"
+}
+
+add_trojan() {
+    header "Add Trojan proxy"
+    local port; port="$(prompt_port)"
+    local pass; pass="$(prompt_password)"
+    local cert key
+    read -rp "  TLS cert path: " cert
+    read -rp "  TLS key path:  " key
+    local block="- address: 0.0.0.0:${port}
+  protocol:
+    type: tls
+    cert: ${cert}
+    key: ${key}
+    protocol:
+      type: trojan
+      password: ${pass}"
+    add_listener "$block"
+    local url="trojan://${pass}@$(get_server_ip):${port}"
+    save_url "$port" "Trojan" "$url"
+    info "Trojan added on port $port."
+    print_url "$port" "Trojan" "$url"
+}
+
+add_vmess() {
+    header "Add VMess proxy"
+    local port; port="$(prompt_port)"
+    local uuid; uuid="$(prompt_uuid)"
+    local block="- address: 0.0.0.0:${port}
+  protocol:
+    type: vmess
+    user_id: ${uuid}"
+    add_listener "$block"
+    local ip; ip="$(get_server_ip)"
+    local json; json="$(printf '{"v":"2","ps":"shoes","add":"%s","port":"%s","id":"%s","aid":"0","net":"tcp","type":"none","tls":""}' "$ip" "$port" "$uuid")"
+    local url="vmess://$(echo -n "$json" | base64 -w0)"
+    save_url "$port" "VMess" "$url"
+    info "VMess added on port $port."
+    print_url "$port" "VMess" "$url"
+}
+
+add_vless() {
+    header "Add VLESS proxy"
+    local port; port="$(prompt_port)"
+    local uuid; uuid="$(prompt_uuid)"
+    local cert key
+    read -rp "  TLS cert path: " cert
+    read -rp "  TLS key path:  " key
+    local block="- address: 0.0.0.0:${port}
+  protocol:
+    type: tls
+    cert: ${cert}
+    key: ${key}
+    protocol:
+      type: vless
+      user_id: ${uuid}"
+    add_listener "$block"
+    local url="vless://${uuid}@$(get_server_ip):${port}?security=tls"
+    save_url "$port" "VLESS" "$url"
+    info "VLESS added on port $port."
+    print_url "$port" "VLESS" "$url"
+}
+
+add_hysteria2() {
+    header "Add Hysteria2 proxy"
+    local port; port="$(prompt_port)"
+    local pass; pass="$(prompt_password)"
+    local cert key
+    read -rp "  TLS cert path: " cert
+    read -rp "  TLS key path:  " key
+    local block="- address: 0.0.0.0:${port}
+  transport: quic
+  quic_settings:
+    cert: ${cert}
+    key: ${key}
+  protocol:
+    type: hysteria2
+    password: ${pass}"
+    add_listener "$block"
+    local url="hysteria2://${pass}@$(get_server_ip):${port}"
+    save_url "$port" "Hysteria2" "$url"
+    info "Hysteria2 added on port $port."
+    print_url "$port" "Hysteria2" "$url"
 }
 
 add_tuic() {
@@ -354,7 +449,10 @@ add_tuic() {
     user_id: ${uuid}
     password: ${pass}"
     add_listener "$block"
+    local url="tuic://${uuid}:${pass}@$(get_server_ip):${port}"
+    save_url "$port" "TUIC v5" "$url"
     info "TUIC v5 added on port $port."
+    print_url "$port" "TUIC v5" "$url"
 }
 
 # ─── Add protocol sub-menu ────────────────────────────────────────────────────
@@ -374,20 +472,19 @@ menu_add_protocol() {
     )
     select choice in "${options[@]}"; do
         case "$choice" in
-            "HTTP")              add_http;       break ;;
-            "SOCKS5")           add_socks5;     break ;;
-            "Shadowsocks")      add_shadowsocks;     break ;;
-            "Shadowsocks 2022") add_shadowsocks2022; break ;;
-            "Trojan (TLS)")     add_trojan;     break ;;
-            "VMess")            add_vmess;      break ;;
-            "VLESS (TLS)")      add_vless;      break ;;
-            "Hysteria2 (QUIC)") add_hysteria2;  break ;;
-            "TUIC v5 (QUIC)")   add_tuic;       break ;;
-            "Back")             break ;;
+            "HTTP")              add_http;            break ;;
+            "SOCKS5")            add_socks5;          break ;;
+            "Shadowsocks")       add_shadowsocks;     break ;;
+            "Shadowsocks 2022")  add_shadowsocks2022; break ;;
+            "Trojan (TLS)")      add_trojan;          break ;;
+            "VMess")             add_vmess;           break ;;
+            "VLESS (TLS)")       add_vless;           break ;;
+            "Hysteria2 (QUIC)")  add_hysteria2;       break ;;
+            "TUIC v5 (QUIC)")    add_tuic;            break ;;
+            "Back")              break ;;
             *) warn "Invalid selection." ;;
         esac
     done
-    # Reload if service is running
     if systemctl is-active --quiet shoes 2>/dev/null; then
         service_action restart
     fi
@@ -431,6 +528,7 @@ main_menu() {
             "List protocols"
             "Remove protocol"
             "Service management"
+            "Uninstall"
             "Exit"
         )
         select choice in "${options[@]}"; do
@@ -450,6 +548,9 @@ main_menu() {
                     break ;;
                 "Service management")
                     menu_service
+                    break ;;
+                "Uninstall")
+                    uninstall_shoes
                     break ;;
                 "Exit")
                     echo "Bye."; exit 0 ;;
