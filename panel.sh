@@ -446,6 +446,7 @@ add_vless_reality() {
         private_key: \"${private_key}\"
         short_ids: [\"${short_id}\", \"\"]
         dest: \"${sni}:443\"
+        vision: true
         protocol:
           type: vless
           user_id: ${uuid}
