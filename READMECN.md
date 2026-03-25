@@ -17,6 +17,9 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 自动下载并安装 shoes 二进制（自动识别 x86_64 / aarch64）
 - 自动写入 systemd 服务，开机自启
 - 交互式菜单管理代理协议：添加 / 删除 / 查看
+- 添加协议后立即显示分享链接
+- 查看协议列表时同步展示分享链接
+- 一键卸载（删除二进制、服务文件及配置目录）
 - 支持以下协议：
   - HTTP
   - SOCKS5

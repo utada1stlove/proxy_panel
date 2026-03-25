@@ -17,6 +17,9 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - Auto-downloads and installs the shoes binary (detects x86_64 / aarch64)
 - Writes a systemd service with auto-start on boot
 - Interactive menu to add / remove / list proxy listeners
+- Displays share URL immediately after adding a protocol
+- Shows share URLs in the listener list
+- One-click uninstall (removes binary, service, and config)
 - Supported protocols:
   - HTTP
   - SOCKS5
