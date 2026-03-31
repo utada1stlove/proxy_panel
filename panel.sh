@@ -67,6 +67,10 @@ b64enc() {
     printf '%s' "$1" | base64 | tr -d '\n'
 }
 
+b64urlenc() {
+    printf '%s' "$1" | base64 | tr -d '\n=' | tr '+/' '-_'
+}
+
 rawurlencode() {
     local input="$1"
     local output=""
@@ -84,6 +88,17 @@ rawurlencode() {
     done
 
     printf '%s\n' "$output"
+}
+
+ss_userinfo_uri() {
+    local cipher="$1" pass="$2"
+
+    if [[ "$cipher" == 2022-* ]]; then
+        printf '%s:%s\n' "$(rawurlencode "$cipher")" "$(rawurlencode "$pass")"
+    else
+        b64urlenc "${cipher}:${pass}"
+        printf '\n'
+    fi
 }
 
 ensure_directory() {
@@ -1287,7 +1302,21 @@ prompt_tls_insecure_share() {
 tls_share_extra_query() {
     local insecure="${1:-false}"
     if [[ "$insecure" == "true" ]]; then
-        printf '&allowInsecure=1&insecure=1&allow_insecure=1'
+        printf '&allowInsecure=1&insecure=1'
+    fi
+}
+
+hysteria2_share_extra_query() {
+    local insecure="${1:-false}"
+    if [[ "$insecure" == "true" ]]; then
+        printf '&insecure=1'
+    fi
+}
+
+tuic_share_extra_query() {
+    local insecure="${1:-false}"
+    if [[ "$insecure" == "true" ]]; then
+        printf '&allow_insecure=1&insecure=1'
     fi
 }
 
@@ -1497,7 +1526,7 @@ add_shadowsocks() {
     password: \"${pass}\"
     udp_enabled: ${udp_enabled}"
 
-    userinfo="$(b64enc "${cipher}:${pass}")"
+    userinfo="$(ss_userinfo_uri "$cipher" "$pass")"
     url="$(append_anchor "ss://${userinfo}@${host}:${port}" "$label")"
 
     url_entries="$(url_entry "$label" "$url")"
@@ -1539,7 +1568,7 @@ add_shadowsocks2022() {
     password: \"${pass}\"
     udp_enabled: ${udp_enabled}"
 
-    userinfo="$(b64enc "${cipher}:${pass}")"
+    userinfo="$(ss_userinfo_uri "$cipher" "$pass")"
     url="$(append_anchor "ss://${userinfo}@${host}:${port}" "$label")"
 
     url_entries="$(url_entry "$label" "$url")"
@@ -1715,7 +1744,7 @@ add_hysteria2() {
     server_name="${tls_values[2]}"
     share_host="${tls_values[3]}"
     share_insecure="${tls_values[4]}"
-    share_query="$(tls_share_extra_query "$share_insecure")"
+    share_query="$(hysteria2_share_extra_query "$share_insecure")"
     label="Hysteria2-${port}"
 
     block="- address: \"0.0.0.0:${port}\"
@@ -1730,9 +1759,9 @@ add_hysteria2() {
     password: \"${pass}\"
     udp_enabled: ${udp_enabled}"
 
-    url="$(append_anchor "hysteria2://$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")${share_query}" "$label")"
+    url="$(append_anchor "hysteria2://$(rawurlencode "$pass")@${share_host}:${port}/?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")${share_query}" "$label")"
     url_entries="$(url_entry "$label" "$url")"
-    url_entries="$(append_url_entry "$url_entries" "HY2-${port}" "$(append_anchor "hy2://$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")${share_query}" "HY2-${port}")")"
+    url_entries="$(append_url_entry "$url_entries" "HY2-${port}" "$(append_anchor "hy2://$(rawurlencode "$pass")@${share_host}:${port}/?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")${share_query}" "HY2-${port}")")"
 
     add_listener "$port" "Hysteria2" "$block" "$url_entries" || return 1
     info "Hysteria2 added on port $port."
@@ -1754,7 +1783,7 @@ add_tuic() {
     server_name="${tls_values[2]}"
     share_host="${tls_values[3]}"
     share_insecure="${tls_values[4]}"
-    share_query="$(tls_share_extra_query "$share_insecure")"
+    share_query="$(tuic_share_extra_query "$share_insecure")"
     label="TUIC-${port}"
 
     block="- address: \"0.0.0.0:${port}\"
@@ -1832,7 +1861,7 @@ add_shadowtls() {
 
     url="$(append_anchor "shadowtls://v3@${share_host}:${port}?password=$(rawurlencode "$pass")&sni=$(rawurlencode "$sni")&inner-ss-pass=$(rawurlencode "$inner_pass")&inner-cipher=$(rawurlencode "$inner_cipher")" "$label")"
     url_entries="$(url_entry "$label" "$url")"
-    userinfo="$(b64enc "${inner_cipher}:${inner_pass}")"
+    userinfo="$(ss_userinfo_uri "$inner_cipher" "$inner_pass")"
     plugin_value="$(rawurlencode "shadow-tls;version=3;host=${sni};password=${pass}")"
     plugin_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}/?plugin=${plugin_value}" "ShadowTLS-SS-${port}")"
     url_entries="$(append_url_entry "$url_entries" "ShadowTLS-SS-${port}" "$plugin_url")"

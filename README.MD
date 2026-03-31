@@ -23,6 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - Long share URLs are split at `@`, `?`, `&`, and `#` boundaries instead of being cut as a single raw line
 - Stores multiple import URLs when a protocol benefits from compatibility aliases (for example `hysteria2://` + `hy2://`, or ShadowTLS + `ss://...plugin=shadow-tls`)
 - Share URLs are now tuned primarily for Shadowrocket, v2rayN, and dae; self-signed TLS flows can include `allowInsecure` / `insecure` flags directly in the URL
+- SIP002 export has been tightened: classic Shadowsocks uses Base64URL userinfo, while AEAD-2022 exports plain percent-encoded `method:password`
 - `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
 - Manages TLS certificates:
   - create self-signed certs under `/etc/shoes/certs/`
@@ -53,6 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 | File | Description |
 |------|-------------|
 | `panel.sh` | Main script — installs `shoes`, manages listeners, certificates, UDP firewall rules, validates config, and shows logs |
+| `docs/client-regression.md` | Current target matrix and manual regression checklist for Shadowrocket / v2rayN / dae |
 
 ## Requirements
 
@@ -63,6 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - Share URL tuning currently targets `Shadowrocket`, `v2rayN`, and `dae`
 - `dae` compatibility is considered only for protocols it documents; `ShadowTLS` is intentionally excluded from the `dae` target matrix
 - For self-signed certificates, the panel can embed `allowInsecure` / `insecure` flags directly in generated URLs
+- `Hysteria2` uses the official `/?query` URI form; `TUIC` keeps `allow_insecure` for dae-style import while also emitting `insecure`
 
 ---
 

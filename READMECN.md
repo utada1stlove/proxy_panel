@@ -23,6 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 长分享链接不再按固定宽度生硬截断，而是优先按 `@`、`?`、`&`、`#` 这些分隔符换行
 - 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`，以及 ShadowTLS 的 `ss://...plugin=shadow-tls`
 - 分享链接目前优先针对 `Shadowrocket`、`v2rayN`、`dae` 调整；自签证书场景可以直接把 `allowInsecure` / `insecure` 带进链接
+- SIP002 导出也收紧了：普通 Shadowsocks 改用 Base64URL userinfo，AEAD-2022 则按明文 `method:password` 百分号编码导出
 - “删除协议” 现在使用 `fzf` 多选：按 `Tab` 勾选多个监听器，再按回车批量删除
 - 内置证书管理：
   - 在 `/etc/shoes/certs/` 生成自签证书
@@ -53,6 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 | 文件 | 说明 |
 |------|------|
 | `panel.sh` | 主脚本，负责安装 shoes、管理监听器、证书、UDP 防火墙、验证配置和查看日志 |
+| `docs/client-regression.md` | 当前 Shadowrocket / v2rayN / dae 的目标矩阵与手工回归清单 |
 
 ## 依赖
 
@@ -63,6 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 当前分享链接优先按 `Shadowrocket`、`v2rayN`、`dae` 这三个客户端做兼容
 - `dae` 只纳入它文档里明确支持的协议，`ShadowTLS` 不在 `dae` 兼容目标内
 - 对自签证书场景，panel 可以直接把 `allowInsecure` / `insecure` 写进生成链接
+- `Hysteria2` 现在使用官方推荐的 `/?query` 形式，`TUIC` 则保留 `allow_insecure` 以兼顾 dae 风格导入，同时输出 `insecure`
 
 ---
 
