@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
-# panel.sh — shoes proxy management panel for Debian/Ubuntu VPS
+# panel.sh - shoes proxy management panel for Debian/Ubuntu VPS
 set -euo pipefail
 
-# ─── Constants ────────────────────────────────────────────────────────────────
 SHOES_VERSION="v0.2.7"
 SHOES_BIN="/usr/local/bin/shoes"
 SHOES_CONFIG_DIR="/etc/shoes"
-SHOES_CONFIG="$SHOES_CONFIG_DIR/config.yaml"
-SHOES_URLS="$SHOES_CONFIG_DIR/urls.conf"
+SHOES_BASE_CONFIG="${SHOES_CONFIG_DIR}/base.yaml"
+SHOES_LISTENER_DIR="${SHOES_CONFIG_DIR}/listeners.d"
+SHOES_CONFIG="${SHOES_CONFIG_DIR}/config.yaml"
+SHOES_URLS="${SHOES_CONFIG_DIR}/urls.conf"
+SHOES_CERT_DIR="${SHOES_CONFIG_DIR}/certs"
+SHOES_CERT_INDEX="${SHOES_CERT_DIR}/index.txt"
+FIREWALL_RULES="${SHOES_CONFIG_DIR}/udp-blocks.conf"
+FIREWALL_NFT_FILE="${SHOES_CONFIG_DIR}/proxy-panel-firewall.nft"
+NFTABLES_MAIN_CONF="/etc/nftables.conf"
 SHOES_SERVICE="/etc/systemd/system/shoes.service"
+PANEL_MARKER="# managed-by-proxy-panel"
 GITHUB_RELEASE_BASE="https://github.com/cfal/shoes/releases/download/${SHOES_VERSION}"
+ACME_SH_BIN="/root/.acme.sh/acme.sh"
 
-# ─── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
-info()    { echo -e "${GREEN}[+]${RESET} $*"; }
-warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
-error()   { echo -e "${RED}[x]${RESET} $*" >&2; }
-header()  { echo -e "\n${BOLD}${CYAN}$*${RESET}\n"; }
+info() { echo -e "${GREEN}[+]${RESET} $*"; }
+warn() { echo -e "${YELLOW}[!]${RESET} $*"; }
+error() { echo -e "${RED}[x]${RESET} $*" >&2; }
+header() { echo -e "\n${BOLD}${CYAN}$*${RESET}\n"; }
 
-# ─── TTY fix: when piped (curl | bash), stdin is the pipe not the terminal ────
 if [[ ! -t 0 ]]; then
     exec < /dev/tty 2>/dev/null || {
         echo "No TTY available. Please run:"
@@ -29,82 +35,726 @@ if [[ ! -t 0 ]]; then
     }
 fi
 
-# ─── Root guard ───────────────────────────────────────────────────────────────
 require_root() {
     [[ $EUID -eq 0 ]] || { error "This script must be run as root."; exit 1; }
 }
 
-# ─── Arch detection ───────────────────────────────────────────────────────────
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 detect_arch() {
     local machine
     machine="$(uname -m)"
     case "$machine" in
-        x86_64)         echo "x86_64-unknown-linux-musl" ;;
-        aarch64|arm64)  echo "aarch64-unknown-linux-musl" ;;
+        x86_64) echo "x86_64-unknown-linux-musl" ;;
+        aarch64|arm64) echo "aarch64-unknown-linux-musl" ;;
         *) error "Unsupported architecture: $machine"; exit 1 ;;
     esac
 }
 
-# ─── Get public IP ────────────────────────────────────────────────────────────
+shoes_installed() {
+    [[ -x "$SHOES_BIN" ]]
+}
+
 get_server_ip() {
     curl -s4 --max-time 5 ifconfig.me 2>/dev/null \
         || curl -s4 --max-time 5 icanhazip.com 2>/dev/null \
         || hostname -I | awk '{print $1}'
 }
 
-# ─── Install / upgrade shoes binary ───────────────────────────────────────────
-install_shoes() {
-    header "Install / Upgrade shoes ${SHOES_VERSION}"
-    local arch tarball url tmpdir
-
-    arch="$(detect_arch)"
-    tarball="shoes-${arch}.tar.gz"
-    url="${GITHUB_RELEASE_BASE}/${tarball}"
-    tmpdir="$(mktemp -d)"
-
-    info "Downloading $tarball ..."
-    curl -fsSL "$url" -o "${tmpdir}/${tarball}"
-    tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"
-
-    local binary
-    binary="$(find "$tmpdir" -maxdepth 2 -type f -name shoes | head -1)"
-    [[ -n "$binary" ]] || { error "Could not find shoes binary in archive."; rm -rf "$tmpdir"; exit 1; }
-
-    install -m 755 "$binary" "$SHOES_BIN"
-    rm -rf "$tmpdir"
-
-    info "shoes installed to $SHOES_BIN"
-    "$SHOES_BIN" --version 2>/dev/null || true
+b64enc() {
+    printf '%s' "$1" | base64 | tr -d '\n'
 }
 
-# ─── Uninstall ────────────────────────────────────────────────────────────────
-uninstall_shoes() {
-    header "Uninstall shoes"
-    warn "This will stop and remove shoes, its service, and all configuration."
-    read -rp "  Are you sure? [y/N]: " confirm
-    [[ "${confirm,,}" == "y" ]] || { info "Cancelled."; return; }
+rawurlencode() {
+    local input="$1"
+    local output=""
+    local i char hex
 
-    if systemctl is-active --quiet shoes 2>/dev/null; then
-        systemctl stop shoes
-        info "Service stopped."
-    fi
-    if systemctl is-enabled --quiet shoes 2>/dev/null; then
-        systemctl disable shoes
-        info "Service disabled."
-    fi
-    [[ -f "$SHOES_SERVICE" ]] && { rm -f "$SHOES_SERVICE"; info "Removed $SHOES_SERVICE"; }
-    systemctl daemon-reload
+    for ((i = 0; i < ${#input}; i++)); do
+        char="${input:i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-]) output+="$char" ;;
+            *)
+                printf -v hex '%%%02X' "'$char"
+                output+="$hex"
+                ;;
+        esac
+    done
 
-    [[ -f "$SHOES_BIN" ]] && { rm -f "$SHOES_BIN"; info "Removed $SHOES_BIN"; }
-    [[ -d "$SHOES_CONFIG_DIR" ]] && { rm -rf "$SHOES_CONFIG_DIR"; info "Removed $SHOES_CONFIG_DIR"; }
-
-    info "Uninstall complete."
-    exit 0
+    printf '%s\n' "$output"
 }
 
-# ─── Systemd service ──────────────────────────────────────────────────────────
+ensure_directory() {
+    mkdir -p "$1"
+}
+
+ensure_config_dirs() {
+    ensure_directory "$SHOES_CONFIG_DIR"
+    ensure_directory "$SHOES_LISTENER_DIR"
+    ensure_directory "$SHOES_CERT_DIR"
+    [[ -f "$SHOES_URLS" ]] || : > "$SHOES_URLS"
+    [[ -f "$SHOES_CERT_INDEX" ]] || : > "$SHOES_CERT_INDEX"
+    [[ -f "$FIREWALL_RULES" ]] || : > "$FIREWALL_RULES"
+}
+
+normalize_name() {
+    local input="$1"
+    input="${input,,}"
+    input="${input//[^a-z0-9._-]/-}"
+    input="${input#-}"
+    input="${input%-}"
+    printf '%s\n' "${input:-item}"
+}
+
+is_ipv4_literal() {
+    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+validate_port_spec() {
+    local value="$1" start end
+    [[ "$value" =~ ^[0-9]+(-[0-9]+)?$ ]] || return 1
+    if [[ "$value" == *-* ]]; then
+        start="${value%-*}"
+        end="${value#*-}"
+        (( start >= 1 && start <= 65535 && end >= start && end <= 65535 ))
+    else
+        (( value >= 1 && value <= 65535 ))
+    fi
+}
+
+prompt_port_spec() {
+    local port_spec
+    while true; do
+        read -rp "  UDP port or range (e.g. 443 or 8000-8099): " port_spec
+        validate_port_spec "$port_spec" && {
+            printf '%s\n' "$port_spec"
+            return 0
+        }
+        warn "Invalid port or range."
+    done
+}
+
+find_acme_sh() {
+    local candidate
+    for candidate in "$ACME_SH_BIN" /usr/local/bin/acme.sh "$HOME/.acme.sh/acme.sh"; do
+        [[ -x "$candidate" ]] && {
+            printf '%s\n' "$candidate"
+            return 0
+        }
+    done
+    return 1
+}
+
+prompt_default_yes() {
+    local prompt="$1" reply
+    read -rp "$prompt [Y/n]: " reply
+    [[ -z "${reply:-}" || "${reply,,}" == "y" || "${reply,,}" == "yes" ]]
+}
+
+prompt_default_no() {
+    local prompt="$1" reply
+    read -rp "$prompt [y/N]: " reply
+    [[ "${reply,,}" == "y" || "${reply,,}" == "yes" ]]
+}
+
+ensure_nft_ready() {
+    if command_exists nft; then
+        return 0
+    fi
+
+    warn "nftables is not installed."
+    prompt_default_yes "  Install nftables now?" || return 1
+
+    if command_exists apt-get; then
+        apt-get update
+        apt-get install -y nftables
+    else
+        error "Automatic nftables installation currently supports apt-get only."
+        return 1
+    fi
+
+    command_exists systemctl && systemctl enable --now nftables >/dev/null 2>&1 || true
+}
+
+firewall_rule_exists() {
+    local direction="$1" port_spec="$2"
+    grep -Fxq "${direction}|${port_spec}" "$FIREWALL_RULES" 2>/dev/null
+}
+
+render_firewall_rules() {
+    local tmp direction port_spec
+
+    ensure_config_dirs
+    tmp="$(mktemp)"
+
+    {
+        cat <<'EOF'
+table inet proxy_panel {
+  chain input {
+    type filter hook input priority 0; policy accept;
+EOF
+
+        while IFS='|' read -r direction port_spec; do
+            [[ -n "${direction:-}" && -n "${port_spec:-}" ]] || continue
+            case "$direction" in
+                input|both)
+                    printf '    udp dport %s counter drop comment "proxy-panel udp input %s"\n' "$port_spec" "$port_spec"
+                    ;;
+            esac
+        done <"$FIREWALL_RULES"
+
+        cat <<'EOF'
+  }
+
+  chain output {
+    type filter hook output priority 0; policy accept;
+EOF
+
+        while IFS='|' read -r direction port_spec; do
+            [[ -n "${direction:-}" && -n "${port_spec:-}" ]] || continue
+            case "$direction" in
+                output|both)
+                    printf '    udp dport %s counter drop comment "proxy-panel udp output %s"\n' "$port_spec" "$port_spec"
+                    ;;
+            esac
+        done <"$FIREWALL_RULES"
+
+        cat <<'EOF'
+  }
+}
+EOF
+    } >"$tmp"
+
+    mv "$tmp" "$FIREWALL_NFT_FILE"
+}
+
+ensure_firewall_persistence() {
+    local include_line="include \"${FIREWALL_NFT_FILE}\""
+
+    if [[ ! -f "$NFTABLES_MAIN_CONF" ]]; then
+        cat >"$NFTABLES_MAIN_CONF" <<EOF
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+${include_line}
+EOF
+        return 0
+    fi
+
+    grep -Fqx "$include_line" "$NFTABLES_MAIN_CONF" || printf '\n%s\n' "$include_line" >>"$NFTABLES_MAIN_CONF"
+}
+
+apply_firewall_rules() {
+    ensure_nft_ready || return 1
+    render_firewall_rules
+    nft delete table inet proxy_panel 2>/dev/null || true
+    nft -f "$FIREWALL_NFT_FILE"
+    ensure_firewall_persistence
+    command_exists systemctl && systemctl enable --now nftables >/dev/null 2>&1 || true
+}
+
+add_udp_block() {
+    local port_spec="$1" direction="$2" backup
+
+    ensure_config_dirs
+    firewall_rule_exists "$direction" "$port_spec" && {
+        warn "That UDP block rule already exists."
+        return 1
+    }
+
+    backup="$(mktemp)"
+    cp "$FIREWALL_RULES" "$backup"
+    printf '%s|%s\n' "$direction" "$port_spec" >>"$FIREWALL_RULES"
+
+    if ! apply_firewall_rules; then
+        mv "$backup" "$FIREWALL_RULES"
+        render_firewall_rules
+        return 1
+    fi
+
+    rm -f "$backup"
+}
+
+remove_udp_block() {
+    local direction="$1" port_spec="$2" backup tmp
+
+    firewall_rule_exists "$direction" "$port_spec" || {
+        warn "That UDP block rule does not exist."
+        return 1
+    }
+
+    backup="$(mktemp)"
+    tmp="$(mktemp)"
+    cp "$FIREWALL_RULES" "$backup"
+    grep -Fvx "${direction}|${port_spec}" "$FIREWALL_RULES" >"$tmp" 2>/dev/null || true
+    mv "$tmp" "$FIREWALL_RULES"
+
+    if ! apply_firewall_rules; then
+        mv "$backup" "$FIREWALL_RULES"
+        render_firewall_rules
+        return 1
+    fi
+
+    rm -f "$backup"
+}
+
+list_udp_blocks() {
+    local index=1 direction port_spec
+
+    header "Managed UDP blocks"
+    ensure_config_dirs
+
+    while IFS='|' read -r direction port_spec; do
+        [[ -n "${direction:-}" && -n "${port_spec:-}" ]] || continue
+        printf '  %d. UDP %s  [%s]\n' "$index" "$port_spec" "$direction"
+        ((index++))
+    done <"$FIREWALL_RULES"
+
+    if (( index == 1 )); then
+        warn "No managed UDP block rules."
+    fi
+}
+
+cert_dir_for_name() {
+    printf '%s/%s\n' "$SHOES_CERT_DIR" "$(normalize_name "$1")"
+}
+
+write_cert_index_entry() {
+    local name="$1" cert_type="$2" cert_path="$3" key_path="$4"
+    local tmp
+
+    ensure_config_dirs
+    tmp="$(mktemp)"
+    grep -Fv "|${cert_path}|${key_path}" "$SHOES_CERT_INDEX" >"$tmp" 2>/dev/null || true
+    printf '%s|%s|%s|%s\n' "$name" "$cert_type" "$cert_path" "$key_path" >>"$tmp"
+    mv "$tmp" "$SHOES_CERT_INDEX"
+}
+
+cert_name_from_path() {
+    local cert_path="$1"
+    awk -F'|' -v cert_path="$cert_path" '$3 == cert_path { print $1; exit }' "$SHOES_CERT_INDEX" 2>/dev/null || true
+}
+
+create_self_signed_cert() {
+    local name="$1" cert_dir cert_path key_path san_line tmp_conf
+
+    command_exists openssl || { error "openssl is required."; return 1; }
+
+    cert_dir="$(cert_dir_for_name "$name")"
+    cert_path="${cert_dir}/fullchain.pem"
+    key_path="${cert_dir}/privkey.pem"
+    ensure_directory "$cert_dir"
+    tmp_conf="$(mktemp)"
+
+    if is_ipv4_literal "$name"; then
+        san_line="IP.1 = ${name}"
+    else
+        san_line="DNS.1 = ${name}"
+    fi
+
+    cat >"$tmp_conf" <<EOF
+[req]
+prompt = no
+distinguished_name = dn
+x509_extensions = v3_req
+
+[dn]
+CN = ${name}
+
+[v3_req]
+subjectAltName = @alt_names
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+
+[alt_names]
+${san_line}
+EOF
+
+    if ! openssl req -x509 -nodes -newkey rsa:2048 \
+        -keyout "$key_path" \
+        -out "$cert_path" \
+        -days 825 \
+        -config "$tmp_conf" >/dev/null 2>&1; then
+        rm -f "$tmp_conf" "$cert_path" "$key_path"
+        error "Failed to create the self-signed certificate."
+        return 1
+    fi
+    chmod 600 "$key_path"
+    rm -f "$tmp_conf"
+
+    write_cert_index_entry "$name" "self-signed" "$cert_path" "$key_path"
+    printf '%s\n%s\n' "$cert_path" "$key_path"
+}
+
+ensure_acme_sh() {
+    local email="$1" acme_sh
+
+    if acme_sh="$(find_acme_sh)"; then
+        printf '%s\n' "$acme_sh"
+        return 0
+    fi
+
+    info "Installing acme.sh ..." >&2
+    curl -fsSL https://get.acme.sh | sh -s email="$email" >/dev/null
+    acme_sh="$(find_acme_sh)" || {
+        error "Failed to install acme.sh."
+        return 1
+    }
+    printf '%s\n' "$acme_sh"
+}
+
+port_80_in_use() {
+    ss -ltn 2>/dev/null | awk 'NR > 1 {print $4}' | grep -Eq '(^|:|\])80$'
+}
+
+issue_domain_cert() {
+    local domain="$1" email="$2" acme_sh cert_dir cert_path key_path
+    local -a stopped_services=()
+    local service
+
+    command_exists openssl || { error "openssl is required."; return 1; }
+    command_exists curl || { error "curl is required."; return 1; }
+
+    acme_sh="$(ensure_acme_sh "$email")" || return 1
+    cert_dir="$(cert_dir_for_name "$domain")"
+    cert_path="${cert_dir}/fullchain.pem"
+    key_path="${cert_dir}/privkey.pem"
+    ensure_directory "$cert_dir"
+
+    if port_80_in_use; then
+        warn "TCP/80 is currently in use. ACME standalone mode needs that port." >&2
+        if prompt_default_yes "  Try stopping nginx/apache2/caddy/shoes temporarily?"; then
+            for service in nginx apache2 caddy shoes; do
+                if command_exists systemctl && systemctl is-active --quiet "$service" 2>/dev/null; then
+                    systemctl stop "$service"
+                    stopped_services+=("$service")
+                fi
+            done
+        fi
+    fi
+
+    if port_80_in_use; then
+        error "Port 80 is still busy. Free it and retry the certificate request."
+        for service in "${stopped_services[@]}"; do
+            command_exists systemctl && systemctl start "$service" >/dev/null 2>&1 || true
+        done
+        return 1
+    fi
+
+    info "Issuing Let's Encrypt certificate for ${domain} ..." >&2
+    if ! "$acme_sh" --issue -d "$domain" --standalone --httpport 80 --server letsencrypt >&2; then
+        error "Certificate issuance failed."
+        for service in "${stopped_services[@]}"; do
+            command_exists systemctl && systemctl start "$service" >/dev/null 2>&1 || true
+        done
+        return 1
+    fi
+
+    if ! "$acme_sh" --install-cert -d "$domain" \
+        --key-file "$key_path" \
+        --fullchain-file "$cert_path" \
+        --reloadcmd "chmod 600 '$key_path'; systemctl restart shoes >/dev/null 2>&1 || true" >/dev/null; then
+        error "Certificate issuance succeeded, but install-cert failed."
+        for service in "${stopped_services[@]}"; do
+            command_exists systemctl && systemctl start "$service" >/dev/null 2>&1 || true
+        done
+        return 1
+    fi
+
+    chmod 600 "$key_path"
+    write_cert_index_entry "$domain" "acme" "$cert_path" "$key_path"
+
+    for service in "${stopped_services[@]}"; do
+        command_exists systemctl && systemctl start "$service" >/dev/null 2>&1 || true
+    done
+
+    printf '%s\n%s\n' "$cert_path" "$key_path"
+}
+
+certificate_common_name() {
+    local cert_path="$1"
+    openssl x509 -in "$cert_path" -noout -subject 2>/dev/null | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p'
+}
+
+certificate_summary() {
+    local cert_path="$1"
+    local subject issuer expiry
+
+    subject="$(openssl x509 -in "$cert_path" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+    issuer="$(openssl x509 -in "$cert_path" -noout -issuer 2>/dev/null | sed 's/^issuer=//')"
+    expiry="$(openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+    printf '%s\n%s\n%s\n' "$subject" "$issuer" "$expiry"
+}
+
+select_managed_certificate() {
+    local -a cert_paths=() labels=()
+    local line name cert_type cert_path key_path index selection
+
+    ensure_config_dirs
+
+    while IFS='|' read -r name cert_type cert_path key_path; do
+        [[ -f "${cert_path:-}" && -f "${key_path:-}" ]] || continue
+        cert_paths+=("$cert_path|$key_path")
+        labels+=("${name} [${cert_type}]")
+    done <"$SHOES_CERT_INDEX"
+
+    [[ ${#cert_paths[@]} -gt 0 ]] || {
+        warn "No managed certificates available." >&2
+        return 1
+    }
+
+    header "Managed certificates" >&2
+    for index in "${!labels[@]}"; do
+        printf '  %d) %s\n' "$((index + 1))" "${labels[$index]}" >&2
+    done
+
+    while true; do
+        read -rp "  Select certificate: " selection
+        [[ "$selection" =~ ^[0-9]+$ ]] || { warn "Invalid selection." >&2; continue; }
+        (( selection >= 1 && selection <= ${#cert_paths[@]} )) || { warn "Invalid selection." >&2; continue; }
+        printf '%s\n' "${cert_paths[$((selection - 1))]}"
+        return 0
+    done
+}
+
+list_managed_certificates() {
+    local name cert_type cert_path key_path
+    local -a summary
+    local found=0
+
+    header "Managed certificates"
+    ensure_config_dirs
+
+    while IFS='|' read -r name cert_type cert_path key_path; do
+        [[ -f "${cert_path:-}" && -f "${key_path:-}" ]] || continue
+        found=1
+        mapfile -t summary < <(certificate_summary "$cert_path")
+        printf '  %s [%s]\n' "$name" "$cert_type"
+        printf '    cert: %s\n' "$cert_path"
+        printf '    key : %s\n' "$key_path"
+        [[ -n "${summary[0]:-}" ]] && printf '    %s\n' "${summary[0]}"
+        [[ -n "${summary[1]:-}" ]] && printf '    %s\n' "${summary[1]}"
+        [[ -n "${summary[2]:-}" ]] && printf '    expires: %s\n' "${summary[2]}"
+    done <"$SHOES_CERT_INDEX"
+
+    (( found == 1 )) || warn "No managed certificates."
+}
+
+config_is_managed() {
+    [[ -f "$SHOES_CONFIG" ]] && grep -Fq "$PANEL_MARKER" "$SHOES_CONFIG"
+}
+
+base_config_has_content() {
+    [[ -f "$SHOES_BASE_CONFIG" ]] && grep -Eq '^[[:space:]]*-[[:space:]]|^[[:space:]]*[a-zA-Z0-9_-]+:' "$SHOES_BASE_CONFIG"
+}
+
+migrate_legacy_config() {
+    ensure_config_dirs
+
+    if [[ -f "$SHOES_CONFIG" && ! -f "$SHOES_BASE_CONFIG" ]] && ! config_is_managed; then
+        mv "$SHOES_CONFIG" "$SHOES_BASE_CONFIG"
+        info "Moved existing config to $SHOES_BASE_CONFIG"
+    fi
+}
+
+render_config() {
+    local tmp
+    tmp="$(mktemp)"
+
+    {
+        printf '%s\n' "$PANEL_MARKER"
+        printf '%s\n\n' "# Generated from base.yaml and listeners.d fragments."
+
+        if [[ -f "$SHOES_BASE_CONFIG" ]]; then
+            sed '/^[[:space:]]*$/N;/^\n$/D' "$SHOES_BASE_CONFIG"
+            printf '\n'
+        fi
+
+        find "$SHOES_LISTENER_DIR" -maxdepth 1 -type f -name '*.yaml' | sort | while IFS= read -r file; do
+            sed '/^[[:space:]]*$/N;/^\n$/D' "$file"
+            printf '\n'
+        done
+    } >"$tmp"
+
+    mv "$tmp" "$SHOES_CONFIG"
+}
+
+validate_config() {
+    shoes_installed || return 0
+    "$SHOES_BIN" --dry-run "$SHOES_CONFIG" >/dev/null
+}
+
+init_config() {
+    migrate_legacy_config
+    render_config
+}
+
+listener_file_for_port() {
+    printf '%s/%05d.yaml\n' "$SHOES_LISTENER_DIR" "$1"
+}
+
+port_in_use() {
+    [[ -f "$(listener_file_for_port "$1")" ]]
+}
+
+save_url() {
+    local port="$1" label="$2" url="$3"
+    local tmp
+
+    ensure_config_dirs
+    tmp="$(mktemp)"
+    grep -v "^${port}|" "$SHOES_URLS" >"$tmp" 2>/dev/null || true
+    printf '%s|%s|%s\n' "$port" "$label" "$url" >>"$tmp"
+    mv "$tmp" "$SHOES_URLS"
+}
+
+remove_url() {
+    local port="$1"
+    local tmp
+
+    [[ -f "$SHOES_URLS" ]] || return 0
+    tmp="$(mktemp)"
+    grep -v "^${port}|" "$SHOES_URLS" >"$tmp" 2>/dev/null || true
+    mv "$tmp" "$SHOES_URLS"
+}
+
+get_url_label() {
+    local port="$1"
+    awk -F'|' -v port="$port" '$1 == port { print $2; exit }' "$SHOES_URLS" 2>/dev/null || true
+}
+
+get_url_value() {
+    local port="$1"
+    awk -F'|' -v port="$port" '$1 == port { print $3; exit }' "$SHOES_URLS" 2>/dev/null || true
+}
+
+write_listener_file() {
+    local port="$1" label="$2" block="$3"
+    local file
+
+    file="$(listener_file_for_port "$port")"
+    {
+        printf '# label: %s\n' "$label"
+        printf '# port: %s\n' "$port"
+        printf '%s\n' "$block"
+    } >"$file"
+}
+
+reload_runtime_config() {
+    render_config
+    if ! validate_config; then
+        warn "Generated config failed validation."
+        return 1
+    fi
+    return 0
+}
+
+restart_if_running() {
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet shoes 2>/dev/null; then
+        service_action restart
+    fi
+}
+
+add_listener() {
+    local port="$1" label="$2" block="$3" url="$4"
+    local file backup_file backup_urls
+
+    init_config
+    file="$(listener_file_for_port "$port")"
+    backup_file=""
+    backup_urls="$(mktemp)"
+    cp "$SHOES_URLS" "$backup_urls" 2>/dev/null || : >"$backup_urls"
+
+    if [[ -f "$file" ]]; then
+        warn "Port $port already exists."
+        rm -f "$backup_urls"
+        return 1
+    fi
+
+    write_listener_file "$port" "$label" "$block"
+    save_url "$port" "$label" "$url"
+
+    if ! reload_runtime_config; then
+        rm -f "$file"
+        mv "$backup_urls" "$SHOES_URLS"
+        render_config
+        return 1
+    fi
+
+    rm -f "$backup_urls" "$backup_file"
+    restart_if_running
+}
+
+remove_listener() {
+    local port="$1"
+    local file backup_file backup_urls
+
+    init_config
+    file="$(listener_file_for_port "$port")"
+    [[ -f "$file" ]] || { warn "No managed listener found on port $port."; return 1; }
+
+    backup_file="$(mktemp)"
+    backup_urls="$(mktemp)"
+    cp "$file" "$backup_file"
+    cp "$SHOES_URLS" "$backup_urls" 2>/dev/null || : >"$backup_urls"
+
+    rm -f "$file"
+    remove_url "$port"
+
+    if ! reload_runtime_config; then
+        mv "$backup_file" "$file"
+        mv "$backup_urls" "$SHOES_URLS"
+        render_config
+        return 1
+    fi
+
+    rm -f "$backup_file" "$backup_urls"
+    info "Removed listener on port $port."
+    restart_if_running
+}
+
+print_url() {
+    local label="$1" url="$2"
+    echo -e "  ${BOLD}${label}${RESET}  ->  ${CYAN}${url}${RESET}"
+}
+
+list_listeners() {
+    local file port label url found=0
+
+    header "Configured listeners"
+    init_config
+
+    for file in "$SHOES_LISTENER_DIR"/*.yaml; do
+        [[ -e "$file" ]] || continue
+        port="$(basename "$file" .yaml)"
+        port="${port#0}"
+        port="${port:-0}"
+        label="$(get_url_label "$port")"
+        url="$(get_url_value "$port")"
+
+        if [[ -n "$url" ]]; then
+            print_url "${label:-port-${port}}" "$url"
+        else
+            echo "  0.0.0.0:${port}"
+        fi
+        found=1
+    done
+
+    if [[ $found -eq 0 ]]; then
+        warn "No managed listeners found in $SHOES_LISTENER_DIR"
+    fi
+
+    if base_config_has_content; then
+        warn "Additional unmanaged entries exist in $SHOES_BASE_CONFIG and are not listed here."
+    fi
+}
+
 write_service() {
-    cat > "$SHOES_SERVICE" <<EOF
+    init_config
+    cat >"$SHOES_SERVICE" <<EOF
 [Unit]
 Description=shoes proxy server
 After=network.target
@@ -118,216 +768,336 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
     systemctl daemon-reload
-    systemctl enable shoes
-    info "shoes.service written and enabled."
+    systemctl enable shoes >/dev/null 2>&1 || true
+    info "shoes.service written."
 }
 
 service_action() {
     local action="$1"
+    command -v systemctl >/dev/null 2>&1 || { warn "systemctl is unavailable."; return 1; }
     systemctl "$action" shoes && info "shoes $action OK." || warn "systemctl $action shoes returned an error."
 }
 
 show_status() {
+    command -v systemctl >/dev/null 2>&1 || { warn "systemctl is unavailable."; return 1; }
     systemctl status shoes --no-pager || true
 }
 
-# ─── URL store ────────────────────────────────────────────────────────────────
-# Format: PORT|LABEL|URL  (one entry per line)
+show_logs() {
+    command -v journalctl >/dev/null 2>&1 || { warn "journalctl is unavailable."; return 1; }
+    journalctl -u shoes -n 100 --no-pager || true
+}
 
-save_url() {
-    local port="$1" label="$2" url="$3"
-    mkdir -p "$SHOES_CONFIG_DIR"
-    # Remove any existing entry for this port first
-    if [[ -f "$SHOES_URLS" ]]; then
-        local tmp; tmp="$(mktemp)"
-        grep -v "^${port}|" "$SHOES_URLS" > "$tmp" || true
-        mv "$tmp" "$SHOES_URLS"
+install_shoes() {
+    header "Install / Upgrade shoes ${SHOES_VERSION}"
+    local arch tarball url tmpdir binary
+
+    arch="$(detect_arch)"
+    tarball="shoes-${arch}.tar.gz"
+    url="${GITHUB_RELEASE_BASE}/${tarball}"
+    tmpdir="$(mktemp -d)"
+
+    info "Downloading $tarball ..."
+    curl -fsSL "$url" -o "${tmpdir}/${tarball}"
+    tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"
+
+    binary="$(find "$tmpdir" -maxdepth 2 -type f -name shoes | head -1)"
+    [[ -n "$binary" ]] || { rm -rf "$tmpdir"; error "Could not find shoes binary in archive."; exit 1; }
+
+    install -m 755 "$binary" "$SHOES_BIN"
+    rm -rf "$tmpdir"
+
+    init_config
+    write_service
+    info "shoes installed to $SHOES_BIN"
+    "$SHOES_BIN" --version 2>/dev/null || true
+}
+
+ensure_shoes_ready() {
+    if shoes_installed; then
+        init_config
+        return 0
     fi
-    echo "${port}|${label}|${url}" >> "$SHOES_URLS"
+
+    warn "shoes is not installed."
+    read -rp "  Install shoes now? [Y/n]: " reply
+    if [[ -z "${reply:-}" || "${reply,,}" == "y" || "${reply,,}" == "yes" ]]; then
+        install_shoes
+        return 0
+    fi
+
+    return 1
 }
 
-remove_url() {
-    local port="$1"
-    [[ -f "$SHOES_URLS" ]] || return
-    local tmp; tmp="$(mktemp)"
-    grep -v "^${port}|" "$SHOES_URLS" > "$tmp" || true
-    mv "$tmp" "$SHOES_URLS"
+uninstall_shoes() {
+    header "Uninstall shoes"
+    warn "This will stop and remove shoes, its service, and all configuration."
+    read -rp "  Are you sure? [y/N]: " confirm
+    [[ "${confirm,,}" == "y" ]] || { info "Cancelled."; return; }
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop shoes 2>/dev/null || true
+        systemctl disable shoes 2>/dev/null || true
+    fi
+
+    [[ -f "$SHOES_SERVICE" ]] && rm -f "$SHOES_SERVICE"
+    command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true
+    [[ -f "$SHOES_BIN" ]] && rm -f "$SHOES_BIN"
+    [[ -d "$SHOES_CONFIG_DIR" ]] && rm -rf "$SHOES_CONFIG_DIR"
+
+    info "Uninstall complete."
+    exit 0
 }
 
-print_url() {
-    local port="$1" label="$2" url="$3"
-    echo -e "  ${BOLD}${label}${RESET}  →  ${CYAN}${url}${RESET}"
-}
-
-# ─── Config helpers ───────────────────────────────────────────────────────────
-init_config() {
-    mkdir -p "$SHOES_CONFIG_DIR"
-    [[ -f "$SHOES_CONFIG" ]] || { echo "# shoes config" > "$SHOES_CONFIG"; info "Created $SHOES_CONFIG"; }
-}
-
-add_listener() {
-    local block="$1"
-    init_config
-    echo "" >> "$SHOES_CONFIG"
-    echo "$block" >> "$SHOES_CONFIG"
-}
-
-list_listeners() {
-    header "Configured listeners"
-    init_config
-    local found=0
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^-[[:space:]]*address:[[:space:]]*0\.0\.0\.0:([0-9]+) ]]; then
-            local port="${BASH_REMATCH[1]}"
-            local url_entry=""
-            if [[ -f "$SHOES_URLS" ]]; then
-                url_entry="$(grep "^${port}|" "$SHOES_URLS" || true)"
-            fi
-            if [[ -n "$url_entry" ]]; then
-                local label url
-                label="$(echo "$url_entry" | cut -d'|' -f2)"
-                url="$(echo "$url_entry" | cut -d'|' -f3)"
-                print_url "$port" "$label" "$url"
-            else
-                echo "  0.0.0.0:${port}"
-            fi
-            found=1
-        fi
-    done < "$SHOES_CONFIG"
-    [[ $found -eq 1 ]] || warn "No listeners found in $SHOES_CONFIG"
-}
-
-remove_listener() {
-    local port="$1"
-    init_config
-    local pattern="^- address: 0\\.0\\.0\\.0:${port}$"
-    local tmpfile; tmpfile="$(mktemp)"
-    awk -v pat="$pattern" '
-        /^- address:/ {
-            if (buffer != "" && !skip) printf "%s", buffer
-            skip = ($0 ~ pat)
-            buffer = $0 "\n"
-            next
-        }
-        {
-            buffer = buffer $0 "\n"
-        }
-        END {
-            if (!skip && buffer != "") printf "%s", buffer
-        }
-    ' "$SHOES_CONFIG" > "$tmpfile"
-    mv "$tmpfile" "$SHOES_CONFIG"
-    remove_url "$port"
-    info "Removed listener on port $port (if it existed)."
-}
-
-# ─── Protocol wizards ─────────────────────────────────────────────────────────
 prompt_port() {
     local port
     while true; do
         read -rp "  Port [1-65535]: " port
-        [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) && break
-        warn "Invalid port number."
+        [[ "$port" =~ ^[0-9]+$ ]] || { warn "Invalid port number."; continue; }
+        (( port >= 1 && port <= 65535 )) || { warn "Invalid port number."; continue; }
+        port_in_use "$port" && { warn "Port $port already has a managed listener."; continue; }
+        printf '%s\n' "$port"
+        return 0
     done
-    echo "$port"
 }
 
 prompt_password() {
     local pass
-    read -rp "  Password: " pass
-    echo "$pass"
+    while true; do
+        read -rp "  Password: " pass
+        [[ -n "$pass" ]] && { printf '%s\n' "$pass"; return 0; }
+        warn "Password cannot be empty."
+    done
 }
 
 prompt_uuid() {
     local uuid
     while true; do
-        read -rp "  UUID (e.g. from uuidgen): " uuid
-        [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] && break
+        read -rp "  UUID: " uuid
+        [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] && { printf '%s\n' "$uuid"; return 0; }
         warn "Doesn't look like a valid UUID."
     done
-    echo "$uuid"
+}
+
+prompt_host_for_share() {
+    local prompt="$1" default="$2" value
+    read -rp "  ${prompt} [${default}]: " value
+    printf '%s\n' "${value:-$default}"
+}
+
+prompt_existing_tls_inputs() {
+    local cert key server_name share_host default_host
+
+    read -rp "  TLS cert path: " cert
+    read -rp "  TLS key path:  " key
+    read -rp "  TLS server name (SNI / domain): " server_name
+
+    [[ -n "$cert" && -n "$key" && -n "$server_name" ]] || {
+        warn "Certificate path, key path, and server name are required." >&2
+        return 1
+    }
+
+    [[ -f "$cert" ]] || { warn "Certificate file not found: $cert" >&2; return 1; }
+    [[ -f "$key" ]] || { warn "Key file not found: $key" >&2; return 1; }
+
+    default_host="$server_name"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$default_host")"
+
+    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host"
+}
+
+prompt_managed_tls_inputs() {
+    local selection cert key detected_name server_name share_host
+
+    selection="$(select_managed_certificate)" || return 1
+    cert="${selection%%|*}"
+    key="${selection#*|}"
+    detected_name="$(cert_name_from_path "$cert")"
+    [[ -n "$detected_name" ]] || detected_name="$(certificate_common_name "$cert")"
+    detected_name="${detected_name:-$(get_server_ip)}"
+
+    read -rp "  TLS server name (SNI / domain) [${detected_name}]: " server_name
+    server_name="${server_name:-$detected_name}"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$server_name")"
+
+    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host"
+}
+
+prompt_self_signed_tls_inputs() {
+    local server_name cert key share_host
+    local -a cert_paths
+
+    read -rp "  Common Name / SNI for self-signed cert: " server_name
+    [[ -n "$server_name" ]] || {
+        warn "A Common Name is required." >&2
+        return 1
+    }
+
+    mapfile -t cert_paths < <(create_self_signed_cert "$server_name") || return 1
+    cert="${cert_paths[0]}"
+    key="${cert_paths[1]}"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$server_name")"
+
+    info "Self-signed certificate created at $cert" >&2
+    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host"
+}
+
+prompt_acme_tls_inputs() {
+    local domain email cert key share_host
+    local -a cert_paths
+
+    read -rp "  Domain for ACME certificate: " domain
+    [[ -n "$domain" ]] || {
+        warn "A domain is required." >&2
+        return 1
+    }
+
+    read -rp "  ACME account email [admin@${domain}]: " email
+    email="${email:-admin@${domain}}"
+
+    mapfile -t cert_paths < <(issue_domain_cert "$domain" "$email") || return 1
+    cert="${cert_paths[0]}"
+    key="${cert_paths[1]}"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$domain")"
+
+    info "Certificate installed at $cert" >&2
+    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$domain" "$share_host"
+}
+
+prompt_tls_inputs() {
+    header "TLS certificate source" >&2
+    echo "  1) Existing cert and key paths" >&2
+    echo "  2) Managed certificate from panel" >&2
+    echo "  3) Create a new self-signed certificate" >&2
+    echo "  4) Issue a domain certificate with ACME (Let's Encrypt)" >&2
+
+    while true; do
+        read -rp "  Choose [1]: " tls_choice
+        case "${tls_choice:-1}" in
+            1) prompt_existing_tls_inputs; return $? ;;
+            2) prompt_managed_tls_inputs; return $? ;;
+            3) prompt_self_signed_tls_inputs; return $? ;;
+            4) prompt_acme_tls_inputs; return $? ;;
+            *) warn "Invalid selection." >&2 ;;
+        esac
+    done
+}
+
+prompt_udp_enabled_yaml() {
+    local reply
+    read -rp "  Enable UDP support? [Y/n]: " reply
+    case "${reply:-y}" in
+        y|Y|yes|YES|'') printf 'true\n' ;;
+        *) printf 'false\n' ;;
+    esac
+}
+
+append_anchor() {
+    local url="$1" label="$2"
+    printf '%s#%s\n' "$url" "$(rawurlencode "$label")"
 }
 
 add_http() {
+    local port user pass block url host label
+
     header "Add HTTP proxy"
-    local port; port="$(prompt_port)"
-    local user pass
+    port="$(prompt_port)"
+    host="$(get_server_ip)"
+    label="HTTP-${port}"
+
     read -rp "  Username (leave blank for no auth): " user
-    local block url
     if [[ -z "$user" ]]; then
-        block="- address: 0.0.0.0:${port}
+        block="- address: \"0.0.0.0:${port}\"
   protocol:
     type: http"
-        url="http://$(get_server_ip):${port}"
+        url="$(append_anchor "http://${host}:${port}" "$label")"
     else
         pass="$(prompt_password)"
-        block="- address: 0.0.0.0:${port}
+        block="- address: \"0.0.0.0:${port}\"
   protocol:
     type: http
-    users:
-      - username: ${user}
-        password: ${pass}"
-        url="http://${user}:${pass}@$(get_server_ip):${port}"
+    username: \"${user}\"
+    password: \"${pass}\""
+        url="$(append_anchor "http://$(rawurlencode "$user"):$(rawurlencode "$pass")@${host}:${port}" "$label")"
     fi
-    add_listener "$block"
-    save_url "$port" "HTTP" "$url"
+
+    add_listener "$port" "HTTP" "$block" "$url" || return 1
     info "HTTP proxy added on port $port."
-    print_url "$port" "HTTP" "$url"
+    print_url "HTTP" "$url"
 }
 
 add_socks5() {
+    local port user pass block url host label udp_enabled
+
     header "Add SOCKS5 proxy"
-    local port; port="$(prompt_port)"
-    local user pass
+    port="$(prompt_port)"
+    host="$(get_server_ip)"
+    label="SOCKS5-${port}"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+
     read -rp "  Username (leave blank for no auth): " user
-    local block url
     if [[ -z "$user" ]]; then
-        block="- address: 0.0.0.0:${port}
+        block="- address: \"0.0.0.0:${port}\"
   protocol:
-    type: socks5"
-        url="socks5://$(get_server_ip):${port}"
+    type: socks
+    udp_enabled: ${udp_enabled}"
+        url="$(append_anchor "socks5://${host}:${port}" "$label")"
     else
         pass="$(prompt_password)"
-        block="- address: 0.0.0.0:${port}
+        block="- address: \"0.0.0.0:${port}\"
   protocol:
-    type: socks5
-    users:
-      - username: ${user}
-        password: ${pass}"
-        url="socks5://${user}:${pass}@$(get_server_ip):${port}"
+    type: socks
+    username: \"${user}\"
+    password: \"${pass}\"
+    udp_enabled: ${udp_enabled}"
+        url="$(append_anchor "socks5://$(rawurlencode "$user"):$(rawurlencode "$pass")@${host}:${port}" "$label")"
     fi
-    add_listener "$block"
-    save_url "$port" "SOCKS5" "$url"
+
+    add_listener "$port" "SOCKS5" "$block" "$url" || return 1
     info "SOCKS5 proxy added on port $port."
-    print_url "$port" "SOCKS5" "$url"
+    print_url "SOCKS5" "$url"
 }
 
 add_shadowsocks() {
+    local port cipher pass block host url userinfo label udp_enabled
+
     header "Add Shadowsocks proxy"
-    local port; port="$(prompt_port)"
-    local cipher pass
+    port="$(prompt_port)"
+    host="$(get_server_ip)"
+    label="Shadowsocks-${port}"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+
     echo "  Cipher options: aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305"
     read -rp "  Cipher [chacha20-ietf-poly1305]: " cipher
     cipher="${cipher:-chacha20-ietf-poly1305}"
     pass="$(prompt_password)"
-    local block="- address: 0.0.0.0:${port}
+
+    block="- address: \"0.0.0.0:${port}\"
   protocol:
     type: shadowsocks
     cipher: ${cipher}
-    password: ${pass}"
-    add_listener "$block"
-    local userinfo; userinfo="$(echo -n "${cipher}:${pass}" | base64 -w0)"
-    local url="ss://${userinfo}@$(get_server_ip):${port}"
-    save_url "$port" "Shadowsocks" "$url"
+    password: \"${pass}\"
+    udp_enabled: ${udp_enabled}"
+
+    userinfo="$(b64enc "${cipher}:${pass}")"
+    url="$(append_anchor "ss://${userinfo}@${host}:${port}" "$label")"
+
+    add_listener "$port" "Shadowsocks" "$block" "$url" || return 1
     info "Shadowsocks added on port $port."
-    print_url "$port" "Shadowsocks" "$url"
+    print_url "Shadowsocks" "$url"
 }
 
 add_shadowsocks2022() {
+    local port cipher pass block host url userinfo label udp_enabled
+
     header "Add Shadowsocks 2022 proxy"
-    local port; port="$(prompt_port)"
-    local cipher
+    port="$(prompt_port)"
+    host="$(get_server_ip)"
+    label="SS2022-${port}"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+
     echo "  Cipher options:"
     echo "    1) 2022-blake3-aes-128-gcm"
     echo "    2) 2022-blake3-aes-256-gcm"
@@ -338,107 +1108,152 @@ add_shadowsocks2022() {
         2|"") cipher="2022-blake3-aes-256-gcm" ;;
         3) cipher="2022-blake3-chacha20-ietf-poly1305" ;;
         2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-ietf-poly1305) ;;
-        *) warn "Unrecognised cipher; proceeding anyway." ;;
+        *) warn "Unrecognised cipher."; return 1 ;;
     esac
+
     info "Generating password for $cipher ..."
-    local pass
     pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$cipher" | awk '/^Password:/{print $2}')"
-    info "Generated password: $pass"
-    local block="- address: 0.0.0.0:${port}
+    [[ -n "$pass" ]] || { warn "Failed to generate SS2022 password."; return 1; }
+
+    block="- address: \"0.0.0.0:${port}\"
   protocol:
     type: shadowsocks
     cipher: ${cipher}
-    password: ${pass}"
-    add_listener "$block"
-    local userinfo; userinfo="$(echo -n "${cipher}:${pass}" | base64 -w0)"
-    local url="ss://${userinfo}@$(get_server_ip):${port}"
-    save_url "$port" "SS2022(${cipher})" "$url"
-    info "Shadowsocks 2022 ($cipher) added on port $port."
-    print_url "$port" "SS2022(${cipher})" "$url"
+    password: \"${pass}\"
+    udp_enabled: ${udp_enabled}"
+
+    userinfo="$(b64enc "${cipher}:${pass}")"
+    url="$(append_anchor "ss://${userinfo}@${host}:${port}" "$label")"
+
+    add_listener "$port" "SS2022(${cipher})" "$block" "$url" || return 1
+    info "Shadowsocks 2022 added on port $port."
+    print_url "SS2022(${cipher})" "$url"
 }
 
 add_trojan() {
+    local port pass cert key server_name share_host block url label
+
     header "Add Trojan proxy"
-    local port; port="$(prompt_port)"
-    local pass; pass="$(prompt_password)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
+    port="$(prompt_port)"
+    pass="$(prompt_password)"
+    mapfile -t tls_values < <(prompt_tls_inputs) || return 1
+    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    cert="${tls_values[0]}"
+    key="${tls_values[1]}"
+    server_name="${tls_values[2]}"
+    share_host="${tls_values[3]}"
+    label="Trojan-${port}"
+
+    block="- address: \"0.0.0.0:${port}\"
+  transport: tcp
   protocol:
     type: tls
-    cert: ${cert}
-    key: ${key}
-    protocol:
-      type: trojan
-      password: ${pass}"
-    add_listener "$block"
-    local url="trojan://${pass}@$(get_server_ip):${port}"
-    save_url "$port" "Trojan" "$url"
+    sni_targets:
+      \"${server_name}\":
+        cert: \"${cert}\"
+        key: \"${key}\"
+        protocol:
+          type: trojan
+          password: \"${pass}\""
+
+    url="$(append_anchor "trojan://$(rawurlencode "$pass")@${share_host}:${port}?security=tls&sni=$(rawurlencode "$server_name")&type=tcp" "$label")"
+
+    add_listener "$port" "Trojan" "$block" "$url" || return 1
     info "Trojan added on port $port."
-    print_url "$port" "Trojan" "$url"
+    print_url "Trojan" "$url"
 }
 
 add_vmess() {
+    local port uuid cipher block url host label udp_enabled json
+
     header "Add VMess proxy"
-    local port; port="$(prompt_port)"
-    local uuid; uuid="$(prompt_uuid)"
-    local block="- address: 0.0.0.0:${port}
+    port="$(prompt_port)"
+    host="$(get_server_ip)"
+    uuid="$(prompt_uuid)"
+    label="VMess-${port}"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+
+    echo "  Cipher options: aes-128-gcm, chacha20-poly1305, none"
+    read -rp "  Cipher [aes-128-gcm]: " cipher
+    cipher="${cipher:-aes-128-gcm}"
+
+    block="- address: \"0.0.0.0:${port}\"
+  transport: tcp
   protocol:
     type: vmess
-    user_id: ${uuid}"
-    add_listener "$block"
-    local ip; ip="$(get_server_ip)"
-    local json; json="$(printf '{"v":"2","ps":"shoes","add":"%s","port":"%s","id":"%s","aid":"0","net":"tcp","type":"none","tls":""}' "$ip" "$port" "$uuid")"
-    local url="vmess://$(echo -n "$json" | base64 -w0)"
-    save_url "$port" "VMess" "$url"
+    cipher: ${cipher}
+    user_id: ${uuid}
+    udp_enabled: ${udp_enabled}"
+
+    json="$(printf '{"v":"2","ps":"%s","add":"%s","port":"%s","id":"%s","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":"","scy":"auto"}' "$label" "$host" "$port" "$uuid")"
+    url="vmess://$(b64enc "$json")"
+
+    add_listener "$port" "VMess" "$block" "$url" || return 1
     info "VMess added on port $port."
-    print_url "$port" "VMess" "$url"
+    print_url "VMess" "$url"
 }
 
 add_vless() {
+    local port uuid cert key server_name share_host block url label udp_enabled
+
     header "Add VLESS proxy"
-    local port; port="$(prompt_port)"
-    local uuid; uuid="$(prompt_uuid)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
+    port="$(prompt_port)"
+    uuid="$(prompt_uuid)"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+    mapfile -t tls_values < <(prompt_tls_inputs) || return 1
+    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    cert="${tls_values[0]}"
+    key="${tls_values[1]}"
+    server_name="${tls_values[2]}"
+    share_host="${tls_values[3]}"
+    label="VLESS-${port}"
+
+    block="- address: \"0.0.0.0:${port}\"
+  transport: tcp
   protocol:
     type: tls
-    cert: ${cert}
-    key: ${key}
-    protocol:
-      type: vless
-      user_id: ${uuid}"
-    add_listener "$block"
-    local url="vless://${uuid}@$(get_server_ip):${port}?security=tls"
-    save_url "$port" "VLESS" "$url"
+    sni_targets:
+      \"${server_name}\":
+        cert: \"${cert}\"
+        key: \"${key}\"
+        protocol:
+          type: vless
+          user_id: ${uuid}
+          udp_enabled: ${udp_enabled}"
+
+    url="$(append_anchor "vless://${uuid}@${share_host}:${port}?encryption=none&security=tls&sni=$(rawurlencode "$server_name")&type=tcp" "$label")"
+
+    add_listener "$port" "VLESS" "$block" "$url" || return 1
     info "VLESS added on port $port."
-    print_url "$port" "VLESS" "$url"
+    print_url "VLESS" "$url"
 }
 
 add_vless_reality() {
+    local port uuid sni keypair_output private_key public_key short_id host share_host block url label udp_enabled
+
     header "Add VLESS-Reality proxy"
-    local port; port="$(prompt_port)"
-    local uuid; uuid="$(prompt_uuid)"
-    local sni
+    port="$(prompt_port)"
+    uuid="$(prompt_uuid)"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
     read -rp "  SNI hostname (e.g. www.apple.com): " sni
     sni="${sni:-www.apple.com}"
+    host="$(get_server_ip)"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$host")"
+    label="VLESS-Reality-${port}"
 
     info "Generating Reality keypair ..."
-    local keypair_output private_key public_key
     keypair_output="$("$SHOES_BIN" generate-reality-keypair)"
     private_key="$(echo "$keypair_output" | awk '/private key:/{print $NF}')"
     public_key="$(echo "$keypair_output" | awk '/public key:/{print $NF}')"
+    short_id="$(openssl rand -hex 8 2>/dev/null || tr -dc 'a-f0-9' </dev/urandom | head -c 16)"
 
-    local short_id
-    short_id="$(openssl rand -hex 8 2>/dev/null || cat /dev/urandom | tr -dc 'a-f0-9' | head -c 16)"
+    [[ -n "$private_key" && -n "$public_key" ]] || { warn "Failed to generate Reality keypair."; return 1; }
 
-    info "Public Key (share with clients): $public_key"
-    info "Short ID   (share with clients): $short_id"
+    info "Public Key: $public_key"
+    info "Short ID : $short_id"
 
-    local block="- address: 0.0.0.0:${port}
+    block="- address: \"0.0.0.0:${port}\"
+  transport: tcp
   protocol:
     type: tls
     reality_targets:
@@ -450,78 +1265,101 @@ add_vless_reality() {
         protocol:
           type: vless
           user_id: ${uuid}
-          udp_enabled: true"
-    add_listener "$block"
+          udp_enabled: ${udp_enabled}"
 
-    local ip; ip="$(get_server_ip)"
-    local url="vless://${uuid}@${ip}:${port}?security=reality&pbk=${public_key}&sid=${short_id}&sni=${sni}&flow=xtls-rprx-vision&type=tcp"
-    save_url "$port" "VLESS-Reality" "$url"
+    url="$(append_anchor "vless://${uuid}@${share_host}:${port}?encryption=none&security=reality&pbk=$(rawurlencode "$public_key")&sid=$(rawurlencode "$short_id")&sni=$(rawurlencode "$sni")&flow=xtls-rprx-vision&type=tcp" "$label")"
+
+    add_listener "$port" "VLESS-Reality" "$block" "$url" || return 1
     info "VLESS-Reality added on port $port."
-    print_url "$port" "VLESS-Reality" "$url"
+    print_url "VLESS-Reality" "$url"
 }
 
 add_hysteria2() {
+    local port pass cert key server_name share_host block url label udp_enabled
+
     header "Add Hysteria2 proxy"
-    local port; port="$(prompt_port)"
-    local pass; pass="$(prompt_password)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
+    port="$(prompt_port)"
+    pass="$(prompt_password)"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+    mapfile -t tls_values < <(prompt_tls_inputs) || return 1
+    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    cert="${tls_values[0]}"
+    key="${tls_values[1]}"
+    server_name="${tls_values[2]}"
+    share_host="${tls_values[3]}"
+    label="Hysteria2-${port}"
+
+    block="- address: \"0.0.0.0:${port}\"
   transport: quic
   quic_settings:
-    cert: ${cert}
-    key: ${key}
+    cert: \"${cert}\"
+    key: \"${key}\"
+    alpn_protocols:
+      - h3
   protocol:
     type: hysteria2
-    password: ${pass}"
-    add_listener "$block"
-    local url="hysteria2://${pass}@$(get_server_ip):${port}"
-    save_url "$port" "Hysteria2" "$url"
+    password: \"${pass}\"
+    udp_enabled: ${udp_enabled}"
+
+    url="$(append_anchor "hysteria2://$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")" "$label")"
+
+    add_listener "$port" "Hysteria2" "$block" "$url" || return 1
     info "Hysteria2 added on port $port."
-    print_url "$port" "Hysteria2" "$url"
+    print_url "Hysteria2" "$url"
 }
 
 add_tuic() {
+    local port uuid pass cert key server_name share_host block url label udp_enabled
+
     header "Add TUIC v5 proxy"
-    local port; port="$(prompt_port)"
-    local uuid; uuid="$(prompt_uuid)"
-    local pass; pass="$(prompt_password)"
-    local cert key
-    read -rp "  TLS cert path: " cert
-    read -rp "  TLS key path:  " key
-    local block="- address: 0.0.0.0:${port}
+    port="$(prompt_port)"
+    uuid="$(prompt_uuid)"
+    pass="$(prompt_password)"
+    udp_enabled="$(prompt_udp_enabled_yaml)"
+    mapfile -t tls_values < <(prompt_tls_inputs) || return 1
+    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    cert="${tls_values[0]}"
+    key="${tls_values[1]}"
+    server_name="${tls_values[2]}"
+    share_host="${tls_values[3]}"
+    label="TUIC-${port}"
+
+    block="- address: \"0.0.0.0:${port}\"
   transport: quic
   quic_settings:
-    cert: ${cert}
-    key: ${key}
+    cert: \"${cert}\"
+    key: \"${key}\"
+    alpn_protocols:
+      - h3
   protocol:
     type: tuic
     user_id: ${uuid}
-    password: ${pass}"
-    add_listener "$block"
-    local url="tuic://${uuid}:${pass}@$(get_server_ip):${port}"
-    save_url "$port" "TUIC v5" "$url"
+    password: \"${pass}\"
+    udp_enabled: ${udp_enabled}"
+
+    url="$(append_anchor "tuic://${uuid}:$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")" "$label")"
+
+    add_listener "$port" "TUIC v5" "$block" "$url" || return 1
     info "TUIC v5 added on port $port."
-    print_url "$port" "TUIC v5" "$url"
+    print_url "TUIC v5" "$url"
 }
 
 add_shadowtls() {
-    header "Add ShadowTLS v3 proxy"
-    local port; port="$(prompt_port)"
-    local pass; pass="$(prompt_password)"
-    local sni
-    read -rp "  Handshake SNI (real TLS server to impersonate, e.g. www.apple.com): " sni
-    sni="${sni:-www.apple.com}"
+    local port pass sni host share_host block url label inner_choice inner_cipher inner_pass
 
-    # Choose inner Shadowsocks variant
+    header "Add ShadowTLS v3 proxy"
+    port="$(prompt_port)"
+    pass="$(prompt_password)"
+    read -rp "  Handshake SNI (e.g. www.apple.com): " sni
+    sni="${sni:-www.apple.com}"
+    host="$(get_server_ip)"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$host")"
+    label="ShadowTLS-${port}"
+
     echo "  Inner protocol:"
     echo "    1) Shadowsocks (chacha20-ietf-poly1305)"
     echo "    2) Shadowsocks 2022 (blake3 ciphers)"
-    local inner_choice
     read -rp "  Choice [1]: " inner_choice
-
-    local inner_cipher inner_pass
 
     case "${inner_choice:-1}" in
         2)
@@ -529,15 +1367,13 @@ add_shadowtls() {
             echo "      1) 2022-blake3-aes-128-gcm"
             echo "      2) 2022-blake3-aes-256-gcm"
             echo "      3) 2022-blake3-chacha20-ietf-poly1305"
-            local cipher_choice
-            read -rp "    Cipher [2]: " cipher_choice
-            case "${cipher_choice:-2}" in
+            read -rp "    Cipher [2]: " inner_choice
+            case "${inner_choice:-2}" in
                 1) inner_cipher="2022-blake3-aes-128-gcm" ;;
                 2|"") inner_cipher="2022-blake3-aes-256-gcm" ;;
                 3) inner_cipher="2022-blake3-chacha20-ietf-poly1305" ;;
-                *) inner_cipher="2022-blake3-aes-256-gcm" ;;
+                *) warn "Unrecognised cipher."; return 1 ;;
             esac
-            info "Generating SS2022 password for $inner_cipher ..."
             inner_pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$inner_cipher" | awk '/^Password:/{print $2}')"
             ;;
         *)
@@ -546,10 +1382,8 @@ add_shadowtls() {
             ;;
     esac
 
-    info "Inner cipher : $inner_cipher"
-    info "Inner password: $inner_pass"
-
-    local block="- address: 0.0.0.0:${port}
+    block="- address: \"0.0.0.0:${port}\"
+  transport: tcp
   protocol:
     type: tls
     shadowtls_targets:
@@ -560,23 +1394,19 @@ add_shadowtls() {
         protocol:
           type: shadowsocks
           cipher: ${inner_cipher}
-          password: ${inner_pass}"
-    add_listener "$block"
+          password: \"${inner_pass}\""
 
-    local ip; ip="$(get_server_ip)"
-    local url="shadowtls://v3@${ip}:${port}?password=${pass}&sni=${sni}&inner-ss-pass=${inner_pass}&inner-cipher=${inner_cipher}"
-    save_url "$port" "ShadowTLS-v3" "$url"
+    url="$(append_anchor "shadowtls://v3@${share_host}:${port}?password=$(rawurlencode "$pass")&sni=$(rawurlencode "$sni")&inner-ss-pass=$(rawurlencode "$inner_pass")&inner-cipher=$(rawurlencode "$inner_cipher")" "$label")"
+
+    add_listener "$port" "ShadowTLS-v3" "$block" "$url" || return 1
     info "ShadowTLS v3 added on port $port."
-    info "  Outer password : $pass"
-    info "  Handshake SNI  : $sni"
-    info "  Inner SS cipher: $inner_cipher"
-    info "  Inner SS pass  : $inner_pass"
-    print_url "$port" "ShadowTLS-v3" "$url"
+    print_url "ShadowTLS-v3" "$url"
 }
 
-# ─── Add protocol sub-menu ────────────────────────────────────────────────────
 menu_add_protocol() {
+    ensure_shoes_ready || return 1
     header "Add Protocol"
+
     local options=(
         "HTTP"
         "SOCKS5"
@@ -591,98 +1421,215 @@ menu_add_protocol() {
         "TUIC v5 (QUIC)"
         "Back"
     )
+
     select choice in "${options[@]}"; do
         case "$choice" in
-            "HTTP")              add_http;            break ;;
-            "SOCKS5")            add_socks5;          break ;;
-            "Shadowsocks")       add_shadowsocks;     break ;;
-            "Shadowsocks 2022")  add_shadowsocks2022; break ;;
-            "Trojan (TLS)")      add_trojan;          break ;;
-            "VMess")             add_vmess;           break ;;
-            "VLESS (TLS)")       add_vless;           break ;;
-            "VLESS-Reality")    add_vless_reality;   break ;;
-            "ShadowTLS v3")     add_shadowtls;       break ;;
-            "Hysteria2 (QUIC)")  add_hysteria2;       break ;;
-            "TUIC v5 (QUIC)")    add_tuic;            break ;;
-            "Back")              break ;;
+            "HTTP") add_http; break ;;
+            "SOCKS5") add_socks5; break ;;
+            "Shadowsocks") add_shadowsocks; break ;;
+            "Shadowsocks 2022") add_shadowsocks2022; break ;;
+            "Trojan (TLS)") add_trojan; break ;;
+            "VMess") add_vmess; break ;;
+            "VLESS (TLS)") add_vless; break ;;
+            "VLESS-Reality") add_vless_reality; break ;;
+            "ShadowTLS v3") add_shadowtls; break ;;
+            "Hysteria2 (QUIC)") add_hysteria2; break ;;
+            "TUIC v5 (QUIC)") add_tuic; break ;;
+            "Back") break ;;
             *) warn "Invalid selection." ;;
         esac
     done
-    if systemctl is-active --quiet shoes 2>/dev/null; then
-        service_action restart
-    fi
 }
 
-# ─── Remove listener sub-menu ─────────────────────────────────────────────────
 menu_remove_listener() {
+    ensure_shoes_ready || return 1
     list_listeners
     local port
     read -rp "  Enter port to remove: " port
-    [[ "$port" =~ ^[0-9]+$ ]] || { warn "Not a valid port."; return; }
+    [[ "$port" =~ ^[0-9]+$ ]] || { warn "Not a valid port."; return 1; }
     remove_listener "$port"
-    if systemctl is-active --quiet shoes 2>/dev/null; then
-        service_action restart
-    fi
 }
 
-# ─── Service sub-menu ─────────────────────────────────────────────────────────
 menu_service() {
+    ensure_shoes_ready || return 1
     header "Service Management"
-    local options=("Start" "Stop" "Restart" "Status" "Back")
+    local options=("Start" "Stop" "Restart" "Status" "Logs" "Back")
+
     select choice in "${options[@]}"; do
         case "$choice" in
-            "Start")   service_action start;   break ;;
-            "Stop")    service_action stop;    break ;;
+            "Start") service_action start; break ;;
+            "Stop") service_action stop; break ;;
             "Restart") service_action restart; break ;;
-            "Status")  show_status;            break ;;
-            "Back")    break ;;
+            "Status") show_status; break ;;
+            "Logs") show_logs; break ;;
+            "Back") break ;;
             *) warn "Invalid selection." ;;
         esac
     done
 }
 
-# ─── Main menu ────────────────────────────────────────────────────────────────
-main_menu() {
+menu_udp_blocks() {
+    local options=("Add UDP block" "List UDP blocks" "Remove UDP block" "Re-apply firewall" "Back")
+    local port_spec direction selection entries line selected_direction selected_port
+    local -a rules=()
+
     while true; do
-        header "shoes Proxy Panel  [${SHOES_VERSION}]"
-        local options=(
-            "Install / Upgrade shoes"
-            "Add protocol"
-            "List protocols"
-            "Remove protocol"
-            "Service management"
-            "Uninstall"
-            "Exit"
-        )
+        header "UDP firewall controls"
         select choice in "${options[@]}"; do
             case "$choice" in
-                "Install / Upgrade shoes")
-                    install_shoes
-                    write_service
-                    break ;;
-                "Add protocol")
-                    menu_add_protocol
-                    break ;;
-                "List protocols")
-                    list_listeners
-                    break ;;
-                "Remove protocol")
-                    menu_remove_listener
-                    break ;;
-                "Service management")
-                    menu_service
-                    break ;;
-                "Uninstall")
-                    uninstall_shoes
-                    break ;;
-                "Exit")
-                    echo "Bye."; exit 0 ;;
-                *) warn "Invalid selection." ;;
+                "Add UDP block")
+                    port_spec="$(prompt_port_spec)"
+                    read -rp "  Direction (input/output/both) [both]: " direction
+                    direction="${direction:-both}"
+                    case "$direction" in
+                        input|output|both)
+                            add_udp_block "$port_spec" "$direction" || true
+                            [[ "$port_spec" == "443" ]] && warn "UDP/443 usually means QUIC. Blocking it often forces TCP/TLS fallback."
+                            ;;
+                        *)
+                            warn "Invalid direction."
+                            ;;
+                    esac
+                    break
+                    ;;
+                "List UDP blocks")
+                    list_udp_blocks
+                    break
+                    ;;
+                "Remove UDP block")
+                    mapfile -t rules < <(grep -Ev '^[[:space:]]*$' "$FIREWALL_RULES" 2>/dev/null || true)
+                    if [[ ${#rules[@]} -eq 0 ]]; then
+                        warn "No managed UDP block rules."
+                        break
+                    fi
+                    list_udp_blocks
+                    read -rp "  Remove which rule #: " selection
+                    [[ "$selection" =~ ^[0-9]+$ ]] || { warn "Invalid selection."; break; }
+                    (( selection >= 1 && selection <= ${#rules[@]} )) || { warn "Invalid selection."; break; }
+                    line="${rules[$((selection - 1))]}"
+                    selected_direction="${line%%|*}"
+                    selected_port="${line#*|}"
+                    remove_udp_block "$selected_direction" "$selected_port" || true
+                    break
+                    ;;
+                "Re-apply firewall")
+                    apply_firewall_rules || true
+                    info "Firewall rules rendered to $FIREWALL_NFT_FILE"
+                    break
+                    ;;
+                "Back")
+                    return 0
+                    ;;
+                *)
+                    warn "Invalid selection."
+                    ;;
             esac
         done
     done
 }
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+menu_certificates() {
+    local options=("List managed certificates" "Create self-signed certificate" "Issue domain certificate (ACME)" "Back")
+    local name domain email
+    local -a cert_paths
+
+    while true; do
+        header "Certificate management"
+        select choice in "${options[@]}"; do
+            case "$choice" in
+                "List managed certificates")
+                    list_managed_certificates
+                    break
+                    ;;
+                "Create self-signed certificate")
+                    read -rp "  Common Name / SNI: " name
+                    [[ -n "$name" ]] || { warn "A Common Name is required."; break; }
+                    mapfile -t cert_paths < <(create_self_signed_cert "$name") || break
+                    info "Certificate: ${cert_paths[0]}"
+                    info "Key:         ${cert_paths[1]}"
+                    break
+                    ;;
+                "Issue domain certificate (ACME)")
+                    read -rp "  Domain: " domain
+                    [[ -n "$domain" ]] || { warn "A domain is required."; break; }
+                    read -rp "  ACME account email [admin@${domain}]: " email
+                    email="${email:-admin@${domain}}"
+                    mapfile -t cert_paths < <(issue_domain_cert "$domain" "$email") || break
+                    info "Certificate: ${cert_paths[0]}"
+                    info "Key:         ${cert_paths[1]}"
+                    break
+                    ;;
+                "Back")
+                    return 0
+                    ;;
+                *)
+                    warn "Invalid selection."
+                    ;;
+            esac
+        done
+    done
+}
+
+main_menu() {
+    while true; do
+        header "shoes Proxy Panel [${SHOES_VERSION}]"
+        local options=(
+            "Install / Upgrade shoes"
+            "Add protocol"
+            "List protocols"
+            "Remove protocol"
+            "Certificates"
+            "UDP firewall"
+            "Service management"
+            "Uninstall"
+            "Exit"
+        )
+
+        select choice in "${options[@]}"; do
+            case "$choice" in
+                "Install / Upgrade shoes")
+                    install_shoes
+                    break
+                    ;;
+                "Add protocol")
+                    menu_add_protocol
+                    break
+                    ;;
+                "List protocols")
+                    ensure_shoes_ready && list_listeners
+                    break
+                    ;;
+                "Remove protocol")
+                    menu_remove_listener
+                    break
+                    ;;
+                "Certificates")
+                    menu_certificates
+                    break
+                    ;;
+                "UDP firewall")
+                    menu_udp_blocks
+                    break
+                    ;;
+                "Service management")
+                    menu_service
+                    break
+                    ;;
+                "Uninstall")
+                    uninstall_shoes
+                    break
+                    ;;
+                "Exit")
+                    echo "Bye."
+                    exit 0
+                    ;;
+                *)
+                    warn "Invalid selection."
+                    ;;
+            esac
+        done
+    done
+}
+
 require_root
 main_menu

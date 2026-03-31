@@ -15,11 +15,23 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 ## 功能
 
 - 自动下载并安装 shoes 二进制（自动识别 x86_64 / aarch64）
+- 若未安装 shoes，在添加协议或管理服务前会先提示安装
 - 自动写入 systemd 服务，开机自启
 - 交互式菜单管理代理协议：添加 / 删除 / 查看
+- 变更后会先执行 `shoes --dry-run` 验证配置，失败则自动回滚
 - 添加协议后立即显示分享链接
-- 查看协议列表时同步展示分享链接
+- 查看协议列表时同步展示分享链接，便于直接导入 Shadowrocket 等客户端
+- 内置证书管理：
+  - 在 `/etc/shoes/certs/` 生成自签证书
+  - 用 `acme.sh` 的 standalone 模式申请 Let's Encrypt 证书
+  - 添加 TLS / QUIC 协议时可直接复用托管证书
+- 内置 UDP 防火墙菜单：
+  - 可封禁任意 UDP 端口或端口范围
+  - 支持 `input` / `output` / `both`
+  - 托管规则会落到 `/etc/shoes/proxy-panel-firewall.nft`
+- 内置 `journalctl` 日志查看
 - 一键卸载（删除二进制、服务文件及配置目录）
+- 托管监听器按文件拆分存放在 `/etc/shoes/listeners.d/`，再自动汇总到 `/etc/shoes/config.yaml`
 - 支持以下协议：
   - HTTP
   - SOCKS5
@@ -37,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 | 文件 | 说明 |
 |------|------|
-| `panel.sh` | 主脚本，所有功能均在此文件中 |
+| `panel.sh` | 主脚本，负责安装 shoes、管理监听器、证书、UDP 防火墙、验证配置和查看日志 |
 
 ## 依赖
 

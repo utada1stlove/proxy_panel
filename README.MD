@@ -15,11 +15,23 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 ## Features
 
 - Auto-downloads and installs the shoes binary (detects x86_64 / aarch64)
+- Prompts to install shoes before protocol/service actions if the binary is missing
 - Writes a systemd service with auto-start on boot
 - Interactive menu to add / remove / list proxy listeners
-- Displays share URL immediately after adding a protocol
-- Shows share URLs in the listener list
+- Validates generated `shoes` config with `--dry-run` before keeping changes
+- Displays share URLs immediately after adding a protocol
+- Shows share URLs in the listener list for direct import into clients such as Shadowrocket
+- Manages TLS certificates:
+  - create self-signed certs under `/etc/shoes/certs/`
+  - issue Let's Encrypt certs with `acme.sh` standalone mode
+  - reuse managed certs when adding TLS / QUIC protocols
+- Manages UDP firewall rules with nftables:
+  - block arbitrary UDP ports or ranges
+  - choose `input`, `output`, or `both`
+  - persist managed rules in `/etc/shoes/proxy-panel-firewall.nft`
+- Adds a `journalctl` log viewer for the `shoes` service
 - One-click uninstall (removes binary, service, and config)
+- Stores managed listeners as separate YAML fragments under `/etc/shoes/listeners.d/` and rebuilds `/etc/shoes/config.yaml`
 - Supported protocols:
   - HTTP
   - SOCKS5
@@ -36,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 | File | Description |
 |------|-------------|
-| `panel.sh` | Main script — all functionality in a single file |
+| `panel.sh` | Main script — installs `shoes`, manages listeners, certificates, UDP firewall rules, validates config, and shows logs |
 
 ## Requirements
 
