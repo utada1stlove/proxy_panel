@@ -2,8 +2,6 @@
 
 基于 [shoes](https://github.com/cfal/shoes)（Rust 高性能多协议代理）衍生的 Bash 管理面板，适配 Debian/Ubuntu VPS，一键部署。
 
-> 本仓库代码 100% 由 [Claude](https://claude.ai) 生成。
-
 ## 一键运行
 
 ```bash
