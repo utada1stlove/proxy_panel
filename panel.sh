@@ -24,7 +24,7 @@ header()  { echo -e "\n${BOLD}${CYAN}$*${RESET}\n"; }
 if [[ ! -t 0 ]]; then
     exec < /dev/tty 2>/dev/null || {
         echo "No TTY available. Please run:"
-        echo "  curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh -o /tmp/panel.sh && bash /tmp/panel.sh"
+        echo "  curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/old/panel.sh -o /tmp/panel.sh && bash /tmp/panel.sh"
         exit 1
     }
 fi
