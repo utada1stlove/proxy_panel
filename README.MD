@@ -5,7 +5,7 @@ A Bash management panel for [shoes](https://github.com/cfal/shoes) — a high-pe
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh | bash
+wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh && chmod +x panel.sh && ./panel
 ```
 
 > Requires root. Run inside `sudo -i` or `su -`.
