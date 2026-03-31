@@ -16,7 +16,7 @@ This file records the current export targets for `proxy_panel` before full live-
 |---|---|
 | Shadowsocks | Use SIP002 style `ss://<Base64URL(method:password)>@host:port#tag` |
 | Shadowsocks 2022 | Use plain SIP002 AEAD-2022 userinfo: `ss://method:password@host:port#tag` |
-| ShadowTLS-SS | Primary export now follows the `ss://...?shadow-tls=<base64-json>` style used by the `ss-2022` script; the old `plugin=shadow-tls` form is kept as a secondary compatibility alias |
+| ShadowTLS | Two modes now exist: `shoes` native single-port mode, or `Shadowrocket` standalone mode with a separate SS2022 backend port and a `shadow-tls=` combined link |
 | Trojan / VLESS over TLS | Self-signed mode uses `allowInsecure=1&insecure=1` |
 | Hysteria2 / HY2 | Use `hysteria2://` and `hy2://`, include `/?` before query, self-signed mode uses `insecure=1` |
 | TUIC | Keep `alpn=h3`, `udp_relay_mode=native`, `congestion_control=cubic`; self-signed mode uses `allow_insecure=1&insecure=1` |

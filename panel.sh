@@ -11,6 +11,9 @@ SHOES_CONFIG="${SHOES_CONFIG_DIR}/config.yaml"
 SHOES_URLS="${SHOES_CONFIG_DIR}/urls.conf"
 SHOES_CERT_DIR="${SHOES_CONFIG_DIR}/certs"
 SHOES_CERT_INDEX="${SHOES_CERT_DIR}/index.txt"
+SHADOWTLS_META_DIR="${SHOES_CONFIG_DIR}/shadowtls.d"
+SHADOWTLS_BIN="/usr/local/bin/shadow-tls"
+SHADOWTLS_INTERNAL_LABEL="__shadowtls_backend__"
 FIREWALL_RULES="${SHOES_CONFIG_DIR}/udp-blocks.conf"
 FIREWALL_NFT_FILE="${SHOES_CONFIG_DIR}/proxy-panel-firewall.nft"
 NFTABLES_MAIN_CONF="/etc/nftables.conf"
@@ -105,6 +108,10 @@ ss_userinfo_uri() {
     fi
 }
 
+internal_url_label() {
+    [[ "$1" == "${SHADOWTLS_INTERNAL_LABEL}"* ]]
+}
+
 ensure_directory() {
     mkdir -p "$1"
 }
@@ -113,6 +120,7 @@ ensure_config_dirs() {
     ensure_directory "$SHOES_CONFIG_DIR"
     ensure_directory "$SHOES_LISTENER_DIR"
     ensure_directory "$SHOES_CERT_DIR"
+    ensure_directory "$SHADOWTLS_META_DIR"
     [[ -f "$SHOES_URLS" ]] || : > "$SHOES_URLS"
     [[ -f "$SHOES_CERT_INDEX" ]] || : > "$SHOES_CERT_INDEX"
     [[ -f "$FIREWALL_RULES" ]] || : > "$FIREWALL_RULES"
@@ -841,8 +849,49 @@ listener_file_for_port() {
     printf '%s/%05d.yaml\n' "$SHOES_LISTENER_DIR" "$1"
 }
 
+shadowtls_meta_file_for_port() {
+    printf '%s/%05d.conf\n' "$SHADOWTLS_META_DIR" "$1"
+}
+
+shadowtls_service_name_for_port() {
+    printf 'shadowtls-ss-%s\n' "$1"
+}
+
+shadowtls_service_file_for_port() {
+    printf '/etc/systemd/system/%s.service\n' "$(shadowtls_service_name_for_port "$1")"
+}
+
+shadowtls_meta_value() {
+    local port="$1" key="$2"
+    local file
+    file="$(shadowtls_meta_file_for_port "$port")"
+    [[ -f "$file" ]] || return 1
+    awk -F'|' -v key="$key" '$1 == key { print substr($0, length($1) + 2); exit }' "$file"
+}
+
+write_shadowtls_meta() {
+    local listen_port="$1" backend_port="$2" share_host="$3" sni="$4" stls_password="$5" inner_cipher="$6" inner_pass="$7"
+    local file
+    file="$(shadowtls_meta_file_for_port "$listen_port")"
+    cat >"$file" <<EOF
+mode|standalone
+listen_port|${listen_port}
+backend_port|${backend_port}
+share_host|${share_host}
+sni|${sni}
+stls_password|${stls_password}
+inner_cipher|${inner_cipher}
+inner_pass|${inner_pass}
+service_name|$(shadowtls_service_name_for_port "$listen_port")
+EOF
+}
+
+shadowtls_meta_exists() {
+    [[ -f "$(shadowtls_meta_file_for_port "$1")" ]]
+}
+
 port_in_use() {
-    [[ -f "$(listener_file_for_port "$1")" ]]
+    [[ -f "$(listener_file_for_port "$1")" || -f "$(shadowtls_meta_file_for_port "$1")" ]]
 }
 
 save_url() {
@@ -960,9 +1009,34 @@ add_listener() {
     restart_if_running
 }
 
+remove_shadowtls_standalone() {
+    local port="$1" skip_restart="${2:-false}"
+    local backend_port meta_file
+
+    meta_file="$(shadowtls_meta_file_for_port "$port")"
+    [[ -f "$meta_file" ]] || { warn "No managed standalone ShadowTLS found on port $port."; return 1; }
+    backend_port="$(shadowtls_meta_value "$port" "backend_port" || true)"
+
+    stop_shadowtls_service "$port"
+    rm -f "$meta_file"
+    remove_url "$port"
+
+    if [[ -n "${backend_port:-}" && -f "$(listener_file_for_port "$backend_port")" ]]; then
+        remove_listener "$backend_port" true || return 1
+    fi
+
+    info "Removed standalone ShadowTLS on port $port."
+    [[ "$skip_restart" == "true" ]] || restart_if_running
+}
+
 remove_listener() {
     local port="$1" skip_restart="${2:-false}"
     local file backup_file backup_urls
+
+    if shadowtls_meta_exists "$port"; then
+        remove_shadowtls_standalone "$port" "$skip_restart"
+        return $?
+    fi
 
     init_config
     file="$(listener_file_for_port "$port")"
@@ -1006,39 +1080,88 @@ print_url_entries() {
 }
 
 listener_detail_rows() {
-    local file port entries line label url label_list url_list
-    local emitted
+    local file port entries label url
+    local emitted internal_only
 
     init_config
 
     for file in "$SHOES_LISTENER_DIR"/*.yaml; do
         [[ -e "$file" ]] || continue
         port="$(basename "$file" .yaml)"
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
         port="$((10#$port))"
         entries="$(get_url_entries "$port")"
         emitted=0
+        internal_only=0
 
         while IFS='|' read -r label url; do
             [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+            if internal_url_label "$label"; then
+                internal_only=1
+                continue
+            fi
             printf '%s\t%s\t%s\n' "$port" "$label" "$url"
             emitted=1
         done <<< "$entries"
 
-        if (( emitted == 0 )); then
+        if (( emitted == 0 && internal_only == 0 )); then
             printf '%s\t%s\t%s\n' "$port" "listener-${port}" "0.0.0.0:${port}"
         fi
+    done
+
+    for file in "$SHADOWTLS_META_DIR"/*.conf; do
+        [[ -e "$file" ]] || continue
+        port="$(basename "$file" .conf)"
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
+        port="$((10#$port))"
+        entries="$(get_url_entries "$port")"
+
+        while IFS='|' read -r label url; do
+            [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+            internal_url_label "$label" && continue
+            printf '%s\t%s\t%s\n' "$port" "$label" "$url"
+        done <<< "$entries"
     done
 }
 
 listener_select_rows() {
     local file port entries label url
     local -a labels urls
+    local internal_only
 
     init_config
 
     for file in "$SHOES_LISTENER_DIR"/*.yaml; do
         [[ -e "$file" ]] || continue
         port="$(basename "$file" .yaml)"
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
+        port="$((10#$port))"
+        entries="$(get_url_entries "$port")"
+        labels=()
+        urls=()
+        internal_only=0
+
+        while IFS='|' read -r label url; do
+            [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+            if internal_url_label "$label"; then
+                internal_only=1
+                continue
+            fi
+            labels+=("$label")
+            urls+=("$url")
+        done <<< "$entries"
+
+        if (( ${#labels[@]} == 0 && internal_only == 0 )); then
+            printf '%s\t%s\t%s\n' "$port" "listener-${port}" "0.0.0.0:${port}"
+        elif (( ${#labels[@]} > 0 )); then
+            printf '%s\t%s\t%s\n' "$port" "$(join_by ', ' "${labels[@]}")" "$(join_by ' || ' "${urls[@]}")"
+        fi
+    done
+
+    for file in "$SHADOWTLS_META_DIR"/*.conf; do
+        [[ -e "$file" ]] || continue
+        port="$(basename "$file" .conf)"
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
         port="$((10#$port))"
         entries="$(get_url_entries "$port")"
         labels=()
@@ -1046,13 +1169,12 @@ listener_select_rows() {
 
         while IFS='|' read -r label url; do
             [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+            internal_url_label "$label" && continue
             labels+=("$label")
             urls+=("$url")
         done <<< "$entries"
 
-        if (( ${#labels[@]} == 0 )); then
-            printf '%s\t%s\t%s\n' "$port" "listener-${port}" "0.0.0.0:${port}"
-        else
+        if (( ${#labels[@]} > 0 )); then
             printf '%s\t%s\t%s\n' "$port" "$(join_by ', ' "${labels[@]}")" "$(join_by ' || ' "${urls[@]}")"
         fi
     done
@@ -1243,6 +1365,50 @@ ensure_shoes_ready() {
     return 1
 }
 
+shadowtls_installed() {
+    [[ -x "$SHADOWTLS_BIN" ]]
+}
+
+latest_shadowtls_version() {
+    curl -fsSL "https://api.github.com/repos/ihciah/shadow-tls/releases/latest" \
+        | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | head -n 1
+}
+
+install_shadowtls() {
+    header "Install shadow-tls"
+    local arch version download_url tmp_file
+
+    arch="$(detect_arch)"
+    version="$(latest_shadowtls_version)"
+    [[ -n "$version" ]] || { error "Failed to detect the latest shadow-tls release."; return 1; }
+
+    download_url="https://github.com/ihciah/shadow-tls/releases/download/${version}/shadow-tls-${arch}"
+    tmp_file="$(mktemp)"
+
+    info "Downloading shadow-tls ${version} ..."
+    curl -fsSL "$download_url" -o "$tmp_file"
+    install -m 755 "$tmp_file" "$SHADOWTLS_BIN"
+    rm -f "$tmp_file"
+
+    info "shadow-tls installed to $SHADOWTLS_BIN"
+}
+
+ensure_shadowtls_ready() {
+    if shadowtls_installed; then
+        return 0
+    fi
+
+    warn "shadow-tls is not installed."
+    read -rp "  Install shadow-tls now? [Y/n]: " reply
+    if [[ -z "${reply:-}" || "${reply,,}" == "y" || "${reply,,}" == "yes" ]]; then
+        install_shadowtls
+        return 0
+    fi
+
+    return 1
+}
+
 uninstall_shoes() {
     header "Uninstall shoes"
     warn "This will stop and remove shoes, its service, and all configuration."
@@ -1282,6 +1448,47 @@ prompt_password() {
         [[ -n "$pass" ]] && { printf '%s\n' "$pass"; return 0; }
         warn "Password cannot be empty."
     done
+}
+
+prompt_shadowtls_backend_mode() {
+    local choice
+    echo "  ShadowTLS mode:" >&2
+    echo "    1) Shadowrocket / standalone ShadowTLS (needs a separate SS2022 backend port)" >&2
+    echo "    2) shoes native single-port ShadowTLS" >&2
+
+    while true; do
+        read -rp "  Choose [2]: " choice
+        case "${choice:-2}" in
+            1) printf 'standalone\n'; return 0 ;;
+            2) printf 'native\n'; return 0 ;;
+            *) warn "Invalid selection." ;;
+        esac
+    done
+}
+
+prompt_ss2022_cipher() {
+    local cipher
+    echo "  SS2022 cipher options:" >&2
+    echo "    1) 2022-blake3-aes-128-gcm" >&2
+    echo "    2) 2022-blake3-aes-256-gcm" >&2
+    echo "    3) 2022-blake3-chacha20-ietf-poly1305" >&2
+
+    while true; do
+        read -rp "  Cipher [2]: " cipher
+        case "${cipher:-2}" in
+            1) printf '2022-blake3-aes-128-gcm\n'; return 0 ;;
+            2|"") printf '2022-blake3-aes-256-gcm\n'; return 0 ;;
+            3) printf '2022-blake3-chacha20-ietf-poly1305\n'; return 0 ;;
+            2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-ietf-poly1305) printf '%s\n' "$cipher"; return 0 ;;
+            *) warn "Unrecognised cipher." ;;
+        esac
+    done
+}
+
+generate_ss2022_password() {
+    local cipher="$1"
+    info "Generating password for $cipher ..." >&2
+    "$SHOES_BIN" generate-shadowsocks-2022-password "$cipher" | awk '/^Password:/{print $2}'
 }
 
 prompt_uuid() {
@@ -1817,11 +2024,71 @@ add_tuic() {
     print_url "TUIC v5" "$url"
 }
 
-add_shadowtls() {
-    local port pass sni host share_host block url url_entries label inner_choice inner_cipher inner_pass plugin_url plugin_value userinfo
-    local shadowrocket_url shadowrocket_param
+write_shadowtls_service_file() {
+    local listen_port="$1" backend_port="$2" sni="$3" password="$4"
+    local service_file service_name
+    service_name="$(shadowtls_service_name_for_port "$listen_port")"
+    service_file="$(shadowtls_service_file_for_port "$listen_port")"
 
-    header "Add ShadowTLS v3 proxy"
+    cat >"$service_file" <<EOF
+[Unit]
+Description=shadow-tls standalone wrapper for backend port ${backend_port}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${SHADOWTLS_BIN} --v3 server --listen ::0:${listen_port} --server 127.0.0.1:${backend_port} --tls ${sni} --password ${password}
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${service_name}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+start_shadowtls_service() {
+    local listen_port="$1"
+    local service_name
+    command -v systemctl >/dev/null 2>&1 || { warn "systemctl is unavailable."; return 1; }
+    service_name="$(shadowtls_service_name_for_port "$listen_port")"
+    systemctl daemon-reload
+    systemctl enable --now "${service_name}" >/dev/null
+}
+
+stop_shadowtls_service() {
+    local listen_port="$1"
+    local service_name service_file
+    command -v systemctl >/dev/null 2>&1 || return 0
+    service_name="$(shadowtls_service_name_for_port "$listen_port")"
+    service_file="$(shadowtls_service_file_for_port "$listen_port")"
+    systemctl stop "${service_name}" 2>/dev/null || true
+    systemctl disable "${service_name}" 2>/dev/null || true
+    rm -f "$service_file"
+    systemctl daemon-reload
+}
+
+add_shadowtls_hidden_backend() {
+    local backend_port="$1" cipher="$2" password="$3"
+    local block hidden_entries
+
+    block="- address: \"0.0.0.0:${backend_port}\"
+  protocol:
+    type: shadowsocks
+    cipher: ${cipher}
+    password: \"${password}\"
+    udp_enabled: true"
+
+    hidden_entries="$(url_entry "${SHADOWTLS_INTERNAL_LABEL}-${backend_port}" "backend:${backend_port}")"
+    add_listener "$backend_port" "ShadowTLS backend ${backend_port}" "$block" "$hidden_entries"
+}
+
+add_shadowtls_native() {
+    local port pass sni host share_host block url url_entries label inner_choice inner_cipher inner_pass
+
     port="$(prompt_port)"
     pass="$(prompt_password)"
     read -rp "  Handshake SNI (e.g. www.apple.com): " sni
@@ -1837,18 +2104,8 @@ add_shadowtls() {
 
     case "${inner_choice:-1}" in
         2)
-            echo "    Inner SS2022 cipher:"
-            echo "      1) 2022-blake3-aes-128-gcm"
-            echo "      2) 2022-blake3-aes-256-gcm"
-            echo "      3) 2022-blake3-chacha20-ietf-poly1305"
-            read -rp "    Cipher [2]: " inner_choice
-            case "${inner_choice:-2}" in
-                1) inner_cipher="2022-blake3-aes-128-gcm" ;;
-                2|"") inner_cipher="2022-blake3-aes-256-gcm" ;;
-                3) inner_cipher="2022-blake3-chacha20-ietf-poly1305" ;;
-                *) warn "Unrecognised cipher."; return 1 ;;
-            esac
-            inner_pass="$("$SHOES_BIN" generate-shadowsocks-2022-password "$inner_cipher" | awk '/^Password:/{print $2}')"
+            inner_cipher="$(prompt_ss2022_cipher)" || return 1
+            inner_pass="$(generate_ss2022_password "$inner_cipher")"
             ;;
         *)
             inner_cipher="chacha20-ietf-poly1305"
@@ -1872,17 +2129,69 @@ add_shadowtls() {
 
     url="$(append_anchor "shadowtls://v3@${share_host}:${port}?password=$(rawurlencode "$pass")&sni=$(rawurlencode "$sni")&inner-ss-pass=$(rawurlencode "$inner_pass")&inner-cipher=$(rawurlencode "$inner_cipher")" "$label")"
     url_entries="$(url_entry "$label" "$url")"
-    userinfo="$(ss_userinfo_uri "$inner_cipher" "$inner_pass")"
-    shadowrocket_param="$(shadowtls_shadowrocket_param "$share_host" "$port" "$sni" "$pass")"
-    shadowrocket_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}?shadow-tls=${shadowrocket_param}" "ShadowTLS-SS-${port}")"
-    url_entries="$(append_url_entry "$url_entries" "ShadowTLS-SS-${port}" "$shadowrocket_url")"
-    plugin_value="$(rawurlencode "shadow-tls;version=3;host=${sni};password=${pass}")"
-    plugin_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}/?plugin=${plugin_value}" "ShadowTLS-Plugin-${port}")"
-    url_entries="$(append_url_entry "$url_entries" "ShadowTLS-Plugin-${port}" "$plugin_url")"
 
     add_listener "$port" "ShadowTLS-v3" "$block" "$url_entries" || return 1
-    info "ShadowTLS v3 added on port $port."
+    info "Native ShadowTLS added on port $port."
     print_url_entries "$port" "$url_entries" "true"
+}
+
+add_shadowtls_standalone() {
+    local listen_port backend_port pass sni host share_host label cipher ss_password userinfo shadowrocket_param url url_entries
+
+    ensure_shadowtls_ready || return 1
+
+    echo "  Standalone mode will create:"
+    echo "    - a hidden SS2022 backend listener inside shoes"
+    echo "    - a standalone shadow-tls systemd service for Shadowrocket-style links"
+
+    listen_port="$(prompt_port)"
+    while true; do
+        backend_port="$(prompt_port)"
+        [[ "$backend_port" != "$listen_port" ]] && break
+        warn "The backend SS2022 port must differ from the ShadowTLS listen port."
+    done
+
+    pass="$(prompt_password)"
+    read -rp "  Handshake SNI (e.g. www.apple.com): " sni
+    sni="${sni:-www.apple.com}"
+    host="$(get_server_ip)"
+    share_host="$(prompt_host_for_share "Host shown in share URL" "$host")"
+    cipher="$(prompt_ss2022_cipher)" || return 1
+    ss_password="$(generate_ss2022_password "$cipher")"
+    [[ -n "$ss_password" ]] || { warn "Failed to generate SS2022 password."; return 1; }
+
+    add_shadowtls_hidden_backend "$backend_port" "$cipher" "$ss_password" || return 1
+
+    write_shadowtls_service_file "$listen_port" "$backend_port" "$sni" "$pass"
+    if ! start_shadowtls_service "$listen_port"; then
+        stop_shadowtls_service "$listen_port"
+        remove_listener "$backend_port" true || true
+        warn "Failed to start the standalone shadow-tls service."
+        return 1
+    fi
+
+    write_shadowtls_meta "$listen_port" "$backend_port" "$share_host" "$sni" "$pass" "$cipher" "$ss_password"
+
+    label="ShadowTLS-SS-${listen_port}"
+    userinfo="$(ss_userinfo_uri "$cipher" "$ss_password")"
+    shadowrocket_param="$(shadowtls_shadowrocket_param "$share_host" "$listen_port" "$sni" "$pass")"
+    url="$(append_anchor "ss://${userinfo}@${share_host}:${backend_port}?shadow-tls=${shadowrocket_param}" "$label")"
+    url_entries="$(url_entry "$label" "$url")"
+    save_url_entries "$listen_port" "$url_entries"
+
+    info "Standalone ShadowTLS added: listen ${listen_port} -> SS2022 backend ${backend_port}."
+    print_url_entries "$listen_port" "$url_entries" "true"
+}
+
+add_shadowtls() {
+    local mode
+
+    header "Add ShadowTLS v3 proxy"
+    mode="$(prompt_shadowtls_backend_mode)"
+    case "$mode" in
+        standalone) add_shadowtls_standalone ;;
+        *) add_shadowtls_native ;;
+    esac
 }
 
 menu_add_protocol() {
