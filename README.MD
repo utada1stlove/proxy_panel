@@ -17,9 +17,10 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - Writes a systemd service with auto-start on boot
 - Interactive menu to add / remove / list proxy listeners
 - Listener list is rendered as a bordered table instead of loose line output
+- The table is now only the overview; full import links are rendered again below as separate "Share Details" blocks
 - Validates generated `shoes` config with `--dry-run` before keeping changes
-- Displays share URLs immediately after adding a protocol
-- Shows share URLs in the listener list for direct import into clients such as Shadowrocket
+- Displays generated share links immediately after adding a protocol in a dedicated share card layout
+- Long share URLs are split at `@`, `?`, `&`, and `#` boundaries instead of being cut as a single raw line
 - Stores multiple import URLs when a protocol benefits from compatibility aliases (for example `hysteria2://` + `hy2://`, or ShadowTLS + `ss://...plugin=shadow-tls`)
 - Share URLs are now tuned primarily for Shadowrocket, v2rayN, and dae; self-signed TLS flows can include `allowInsecure` / `insecure` flags directly in the URL
 - `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
@@ -55,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 ## Requirements
 
-`curl`, `tar`, `systemctl` — all present by default on Debian/Ubuntu. `fzf` is optional and the panel can offer to install it when multi-select removal is used.
+`curl`, `tar`, `systemctl` — all present by default on Debian/Ubuntu. `fzf` is optional and the panel can offer to install it when multi-select removal is used. `qrencode` is optional; when present, the panel prints QR codes for newly generated share links.
 
 ## Client Notes
 

@@ -17,9 +17,10 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 自动写入 systemd 服务，开机自启
 - 交互式菜单管理代理协议：添加 / 删除 / 查看
 - 协议列表改成了带边框的表格显示，不再是一行一行散着输出
+- 表格现在只负责总览，完整导入链接会在下方再输出成独立的 “Share Details” 分享块
 - 变更后会先执行 `shoes --dry-run` 验证配置，失败则自动回滚
-- 添加协议后立即显示分享链接
-- 查看协议列表时同步展示分享链接，便于直接导入 Shadowrocket 等客户端
+- 添加协议后会立即用独立分享块展示生成链接
+- 长分享链接不再按固定宽度生硬截断，而是优先按 `@`、`?`、`&`、`#` 这些分隔符换行
 - 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`，以及 ShadowTLS 的 `ss://...plugin=shadow-tls`
 - 分享链接目前优先针对 `Shadowrocket`、`v2rayN`、`dae` 调整；自签证书场景可以直接把 `allowInsecure` / `insecure` 带进链接
 - “删除协议” 现在使用 `fzf` 多选：按 `Tab` 勾选多个监听器，再按回车批量删除
@@ -55,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 ## 依赖
 
-目标系统需具备：`curl`、`tar`、`systemctl`（Debian/Ubuntu 默认已有）。`fzf` 为可选依赖，使用多选删除时 panel 会提示安装。
+目标系统需具备：`curl`、`tar`、`systemctl`（Debian/Ubuntu 默认已有）。`fzf` 为可选依赖，使用多选删除时 panel 会提示安装；`qrencode` 也是可选依赖，安装后新增协议时会额外输出二维码。
 
 ## 客户端说明
 

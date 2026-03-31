@@ -216,6 +216,139 @@ wrap_text_lines() {
     done
 }
 
+wrap_share_base_lines() {
+    local base="$1" width="$2"
+    local left right
+
+    if [[ "$base" == *'@'* && "$base" == *'://'* ]]; then
+        left="${base%@*}"
+        right="@${base#*@}"
+
+        if (( ${#left} <= width )); then
+            printf '%s\n' "$left"
+            wrap_text_lines "$right" "$width"
+            return 0
+        fi
+    fi
+
+    wrap_text_lines "$base" "$width"
+}
+
+wrap_share_url_lines() {
+    local url="$1" width="$2"
+    local base query fragment item prefix
+    local -a query_items
+
+    if [[ -z "$url" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    base="$url"
+    fragment=""
+    query=""
+
+    if [[ "$base" == *'#'* ]]; then
+        fragment="#${base#*#}"
+        base="${base%%#*}"
+    fi
+
+    if [[ "$base" == *'?'* ]]; then
+        query="${base#*\?}"
+        base="${base%%\?*}"
+    fi
+
+    wrap_share_base_lines "$base" "$width"
+
+    if [[ -n "$query" ]]; then
+        IFS='&' read -r -a query_items <<< "$query"
+        prefix='?'
+        for item in "${query_items[@]}"; do
+            wrap_text_lines "${prefix}${item}" "$width"
+            prefix='&'
+        done
+    fi
+
+    if [[ -n "$fragment" ]]; then
+        wrap_text_lines "$fragment" "$width"
+    fi
+}
+
+share_scheme() {
+    local url="$1"
+    if [[ "$url" =~ ^([^:]+):// ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    else
+        printf '%s\n' "raw"
+    fi
+}
+
+share_endpoint() {
+    local url="$1" base scheme
+    scheme="$(share_scheme "$url")"
+
+    if [[ "$scheme" == "vmess" ]]; then
+        printf '%s\n' "encoded payload"
+        return 0
+    fi
+
+    base="${url%%\?*}"
+    base="${base%%#*}"
+    base="${base#*://}"
+
+    if [[ "$base" == *@* ]]; then
+        base="${base#*@}"
+    fi
+
+    printf '%s\n' "${base:-n/a}"
+}
+
+print_share_card() {
+    local port="$1" label="$2" url="$3" show_qr="${4:-false}"
+    local cols line_width divider scheme endpoint
+    local line
+
+    cols="$(terminal_columns)"
+    line_width=$((cols - 2))
+    (( line_width < 72 )) && line_width=72
+    divider="$(repeat_char '━' "$line_width")"
+    scheme="$(share_scheme "$url")"
+    endpoint="$(share_endpoint "$url")"
+
+    printf '%b%s%b\n' "${CYAN}" "$divider" "${RESET}"
+    printf '%bShare%b  %s  %b(port %s)%b\n' "${BOLD}${CYAN}" "${RESET}" "$label" "${YELLOW}" "$port" "${RESET}"
+    printf '  %bScheme%b   %s\n' "${BOLD}" "${RESET}" "$scheme"
+    printf '  %bEndpoint%b %s\n' "${BOLD}" "${RESET}" "$endpoint"
+    printf '  %bURL%b\n' "${BOLD}" "${RESET}"
+
+    while IFS= read -r line; do
+        printf '    %b%s%b\n' "${CYAN}" "$line" "${RESET}"
+    done < <(wrap_share_url_lines "$url" $((cols - 6)))
+
+    if [[ "$show_qr" == "true" && -n "$url" && "$(share_scheme "$url")" != "raw" ]]; then
+        if command_exists qrencode; then
+            printf '  %bQR%b\n' "${BOLD}" "${RESET}"
+            qrencode -t UTF8 <<<"$url"
+        fi
+    fi
+}
+
+print_share_details() {
+    local rows="$1"
+    local row port label url
+    local emitted=0
+
+    header "Share Details"
+    while IFS= read -r row; do
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+        print_share_card "$port" "$label" "$url"
+        emitted=1
+    done <<< "$rows"
+
+    (( emitted == 1 )) && printf '%b%s%b\n' "${CYAN}" "$(repeat_char '━' "$(terminal_columns)")" "${RESET}"
+}
+
 terminal_columns() {
     local cols
     cols="$(tput cols 2>/dev/null || printf '120')"
@@ -832,7 +965,19 @@ remove_listener() {
 
 print_url() {
     local label="$1" url="$2"
-    echo -e "  ${BOLD}${label}${RESET}  ->  ${CYAN}${url}${RESET}"
+    local port="${label##*-}"
+    [[ "$port" =~ ^[0-9]+$ ]] || port="n/a"
+    print_share_card "$port" "$label" "$url" "true"
+}
+
+print_url_entries() {
+    local port="$1" entries="$2" show_qr="${3:-true}"
+    local label url
+
+    while IFS='|' read -r label url; do
+        [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+        print_share_card "$port" "$label" "$url" "$show_qr"
+    done <<< "$entries"
 }
 
 listener_detail_rows() {
@@ -926,7 +1071,7 @@ print_listener_table() {
 
         mapfile -t port_lines < <(wrap_text_lines "$port" "$port_w")
         mapfile -t label_lines < <(wrap_text_lines "$label" "$label_w")
-        mapfile -t url_lines < <(wrap_text_lines "$url" "$url_w")
+        mapfile -t url_lines < <(wrap_share_url_lines "$url" "$url_w")
         max_lines=${#port_lines[@]}
         (( ${#label_lines[@]} > max_lines )) && max_lines=${#label_lines[@]}
         (( ${#url_lines[@]} > max_lines )) && max_lines=${#url_lines[@]}
@@ -985,7 +1130,8 @@ list_listeners() {
         warn "No managed listeners found in $SHOES_LISTENER_DIR"
     else
         print_listener_table "$rows"
-        info "Each share URL is shown in full with wrapping. Rows are separated so you can verify generated links directly."
+        info "The table stays as an overview. Full share output is shown below in a cleaner share block format."
+        print_share_details "$rows"
     fi
 
     if base_config_has_content; then
@@ -1590,7 +1736,7 @@ add_hysteria2() {
 
     add_listener "$port" "Hysteria2" "$block" "$url_entries" || return 1
     info "Hysteria2 added on port $port."
-    print_url "Hysteria2" "$url"
+    print_url_entries "$port" "$url_entries" "true"
 }
 
 add_tuic() {
@@ -1693,7 +1839,7 @@ add_shadowtls() {
 
     add_listener "$port" "ShadowTLS-v3" "$block" "$url_entries" || return 1
     info "ShadowTLS v3 added on port $port."
-    print_url "ShadowTLS-v3" "$url"
+    print_url_entries "$port" "$url_entries" "true"
 }
 
 menu_add_protocol() {
