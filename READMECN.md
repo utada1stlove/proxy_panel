@@ -21,7 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 变更后会先执行 `shoes --dry-run` 验证配置，失败则自动回滚
 - 添加协议后会立即用独立分享块展示生成链接
 - 长分享链接不再按固定宽度生硬截断，而是优先按 `@`、`?`、`&`、`#` 这些分隔符换行
-- 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`，以及 ShadowTLS 的 `ss://...plugin=shadow-tls`
+- 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`，以及 ShadowTLS 同时提供 `shadow-tls=` 和 `plugin=shadow-tls`
+- 分享块里的链接现在会按单行原始串输出，方便直接复制，不再把真正的 URL 人工切断
 - 分享链接目前优先针对 `Shadowrocket`、`v2rayN`、`dae` 调整；自签证书场景可以直接把 `allowInsecure` / `insecure` 带进链接
 - SIP002 导出也收紧了：普通 Shadowsocks 改用 Base64URL userinfo，AEAD-2022 则按明文 `method:password` 百分号编码导出
 - “删除协议” 现在使用 `fzf` 多选：按 `Tab` 勾选多个监听器，再按回车批量删除

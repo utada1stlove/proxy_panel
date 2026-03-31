@@ -9,5 +9,6 @@
 20008|HY2-20008|hy2://test-password@hk.example.com:20008/?sni=cdn.example.com&alpn=h3&insecure=1#HY2-20008
 20009|TUIC-20009|tuic://123e4567-e89b-42d3-a456-426614174000:test-password@hk.example.com:20009?sni=cdn.example.com&alpn=h3&udp_relay_mode=native&congestion_control=cubic&allow_insecure=1&insecure=1#TUIC-20009
 20010|ShadowTLS-20010|shadowtls://v3@hk.example.com:20010?password=test-password&sni=www.apple.com&inner-ss-pass=inner-password&inner-cipher=chacha20-ietf-poly1305#ShadowTLS-20010
-20010|ShadowTLS-SS-20010|ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTppbm5lci1wYXNzd29yZA@hk.example.com:20010/?plugin=shadow-tls%3Bversion%3D3%3Bhost%3Dwww.apple.com%3Bpassword%3Dtest-password#ShadowTLS-SS-20010
+20010|ShadowTLS-SS-20010|ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTppbm5lci1wYXNzd29yZA@hk.example.com:20010?shadow-tls=eyJ2ZXJzaW9uIjoiMyIsInBhc3N3b3JkIjoidGVzdC1wYXNzd29yZCIsImhvc3QiOiJ3d3cuYXBwbGUuY29tIiwicG9ydCI6IjIwMDEwIiwiYWRkcmVzcyI6ImhrLmV4YW1wbGUuY29tIn0=#ShadowTLS-SS-20010
+20010|ShadowTLS-Plugin-20010|ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTppbm5lci1wYXNzd29yZA@hk.example.com:20010/?plugin=shadow-tls%3Bversion%3D3%3Bhost%3Dwww.apple.com%3Bpassword%3Dtest-password#ShadowTLS-Plugin-20010
 20011|SS2022(2022-blake3-aes-256-gcm)-20011|ss://2022-blake3-aes-256-gcm:test-password-2022@hk.example.com:20011#SS2022%282022-blake3-aes-256-gcm%29-20011

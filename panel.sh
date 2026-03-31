@@ -71,6 +71,10 @@ b64urlenc() {
     printf '%s' "$1" | base64 | tr -d '\n=' | tr '+/' '-_'
 }
 
+b64stdenc() {
+    printf '%s' "$1" | base64 | tr -d '\n'
+}
+
 rawurlencode() {
     local input="$1"
     local output=""
@@ -318,10 +322,19 @@ share_endpoint() {
     printf '%s\n' "${base:-n/a}"
 }
 
+shadowtls_shadowrocket_param() {
+    local address="$1" port="$2" sni="$3" password="$4"
+    local json
+
+    json="$(printf '{"version":"3","password":"%s","host":"%s","port":"%s","address":"%s"}' \
+        "$password" "$sni" "$port" "$address")"
+    b64stdenc "$json"
+    printf '\n'
+}
+
 print_share_card() {
     local port="$1" label="$2" url="$3" show_qr="${4:-false}"
     local cols line_width divider scheme endpoint
-    local line
 
     cols="$(terminal_columns)"
     line_width=$((cols - 2))
@@ -334,11 +347,8 @@ print_share_card() {
     printf '%bShare%b  %s  %b(port %s)%b\n' "${BOLD}${CYAN}" "${RESET}" "$label" "${YELLOW}" "$port" "${RESET}"
     printf '  %bScheme%b   %s\n' "${BOLD}" "${RESET}" "$scheme"
     printf '  %bEndpoint%b %s\n' "${BOLD}" "${RESET}" "$endpoint"
-    printf '  %bURL%b\n' "${BOLD}" "${RESET}"
-
-    while IFS= read -r line; do
-        printf '    %b%s%b\n' "${CYAN}" "$line" "${RESET}"
-    done < <(wrap_share_url_lines "$url" $((cols - 6)))
+    printf '  %bCopy URL%b\n' "${BOLD}" "${RESET}"
+    printf '    %s\n' "$url"
 
     if [[ "$show_qr" == "true" && -n "$url" && "$(share_scheme "$url")" != "raw" ]]; then
         if command_exists qrencode; then
@@ -1809,6 +1819,7 @@ add_tuic() {
 
 add_shadowtls() {
     local port pass sni host share_host block url url_entries label inner_choice inner_cipher inner_pass plugin_url plugin_value userinfo
+    local shadowrocket_url shadowrocket_param
 
     header "Add ShadowTLS v3 proxy"
     port="$(prompt_port)"
@@ -1862,9 +1873,12 @@ add_shadowtls() {
     url="$(append_anchor "shadowtls://v3@${share_host}:${port}?password=$(rawurlencode "$pass")&sni=$(rawurlencode "$sni")&inner-ss-pass=$(rawurlencode "$inner_pass")&inner-cipher=$(rawurlencode "$inner_cipher")" "$label")"
     url_entries="$(url_entry "$label" "$url")"
     userinfo="$(ss_userinfo_uri "$inner_cipher" "$inner_pass")"
+    shadowrocket_param="$(shadowtls_shadowrocket_param "$share_host" "$port" "$sni" "$pass")"
+    shadowrocket_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}?shadow-tls=${shadowrocket_param}" "ShadowTLS-SS-${port}")"
+    url_entries="$(append_url_entry "$url_entries" "ShadowTLS-SS-${port}" "$shadowrocket_url")"
     plugin_value="$(rawurlencode "shadow-tls;version=3;host=${sni};password=${pass}")"
-    plugin_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}/?plugin=${plugin_value}" "ShadowTLS-SS-${port}")"
-    url_entries="$(append_url_entry "$url_entries" "ShadowTLS-SS-${port}" "$plugin_url")"
+    plugin_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}/?plugin=${plugin_value}" "ShadowTLS-Plugin-${port}")"
+    url_entries="$(append_url_entry "$url_entries" "ShadowTLS-Plugin-${port}" "$plugin_url")"
 
     add_listener "$port" "ShadowTLS-v3" "$block" "$url_entries" || return 1
     info "ShadowTLS v3 added on port $port."

@@ -21,7 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - Validates generated `shoes` config with `--dry-run` before keeping changes
 - Displays generated share links immediately after adding a protocol in a dedicated share card layout
 - Long share URLs are split at `@`, `?`, `&`, and `#` boundaries instead of being cut as a single raw line
-- Stores multiple import URLs when a protocol benefits from compatibility aliases (for example `hysteria2://` + `hy2://`, or ShadowTLS + `ss://...plugin=shadow-tls`)
+- Stores multiple import URLs when a protocol benefits from compatibility aliases (for example `hysteria2://` + `hy2://`, or ShadowTLS with both `shadow-tls=` and `plugin=shadow-tls`)
+- Share blocks now print a single raw URL line for direct copy instead of inserting hard line breaks into the link itself
 - Share URLs are now tuned primarily for Shadowrocket, v2rayN, and dae; self-signed TLS flows can include `allowInsecure` / `insecure` flags directly in the URL
 - SIP002 export has been tightened: classic Shadowsocks uses Base64URL userinfo, while AEAD-2022 exports plain percent-encoded `method:password`
 - `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
