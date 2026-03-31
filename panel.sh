@@ -1686,7 +1686,7 @@ add_http() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "HTTP" "$block" "$url_entries" || return 1
     info "HTTP proxy added on port $port."
-    print_url "HTTP" "$url"
+    print_url "$label" "$url"
 }
 
 add_socks5() {
@@ -1719,7 +1719,7 @@ add_socks5() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "SOCKS5" "$block" "$url_entries" || return 1
     info "SOCKS5 proxy added on port $port."
-    print_url "SOCKS5" "$url"
+    print_url "$label" "$url"
 }
 
 add_shadowsocks() {
@@ -1749,7 +1749,7 @@ add_shadowsocks() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "Shadowsocks" "$block" "$url_entries" || return 1
     info "Shadowsocks added on port $port."
-    print_url "Shadowsocks" "$url"
+    print_url "$label" "$url"
 }
 
 add_shadowsocks2022() {
@@ -1791,7 +1791,7 @@ add_shadowsocks2022() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "SS2022(${cipher})" "$block" "$url_entries" || return 1
     info "Shadowsocks 2022 added on port $port."
-    print_url "SS2022(${cipher})" "$url"
+    print_url "$label" "$url"
 }
 
 add_trojan() {
@@ -1827,7 +1827,7 @@ add_trojan() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "Trojan" "$block" "$url_entries" || return 1
     info "Trojan added on port $port."
-    print_url "Trojan" "$url"
+    print_url "$label" "$url"
 }
 
 add_vmess() {
@@ -1859,7 +1859,7 @@ add_vmess() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "VMess" "$block" "$url_entries" || return 1
     info "VMess added on port $port."
-    print_url "VMess" "$url"
+    print_url "$label" "$url"
 }
 
 add_vless() {
@@ -1897,7 +1897,7 @@ add_vless() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "VLESS" "$block" "$url_entries" || return 1
     info "VLESS added on port $port."
-    print_url "VLESS" "$url"
+    print_url "$label" "$url"
 }
 
 add_vless_reality() {
@@ -1944,7 +1944,7 @@ add_vless_reality() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "VLESS-Reality" "$block" "$url_entries" || return 1
     info "VLESS-Reality added on port $port."
-    print_url "VLESS-Reality" "$url"
+    print_url "$label" "$url"
 }
 
 add_hysteria2() {
@@ -2021,7 +2021,7 @@ add_tuic() {
     url_entries="$(url_entry "$label" "$url")"
     add_listener "$port" "TUIC v5" "$block" "$url_entries" || return 1
     info "TUIC v5 added on port $port."
-    print_url "TUIC v5" "$url"
+    print_url "$label" "$url"
 }
 
 write_shadowtls_service_file() {
