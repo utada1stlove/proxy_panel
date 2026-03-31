@@ -16,9 +16,13 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - Prompts to install shoes before protocol/service actions if the binary is missing
 - Writes a systemd service with auto-start on boot
 - Interactive menu to add / remove / list proxy listeners
+- Listener list is rendered as a bordered table instead of loose line output
 - Validates generated `shoes` config with `--dry-run` before keeping changes
 - Displays share URLs immediately after adding a protocol
 - Shows share URLs in the listener list for direct import into clients such as Shadowrocket
+- Stores multiple import URLs when a protocol benefits from compatibility aliases (for example `hysteria2://` + `hy2://`, or ShadowTLS + `ss://...plugin=shadow-tls`)
+- Share URLs are now tuned primarily for Shadowrocket, v2rayN, and dae; self-signed TLS flows can include `allowInsecure` / `insecure` flags directly in the URL
+- `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
 - Manages TLS certificates:
   - create self-signed certs under `/etc/shoes/certs/`
   - issue Let's Encrypt certs with `acme.sh` standalone mode
@@ -39,6 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
   - VMess
   - VLESS (TLS)
   - VLESS-Reality (auto-generates X25519 keypair, shows public key + short ID for clients)
+  - ShadowTLS v3
   - Hysteria2 (QUIC)
   - TUIC v5 (QUIC)
 
@@ -50,7 +55,13 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 ## Requirements
 
-`curl`, `tar`, `systemctl` — all present by default on Debian/Ubuntu.
+`curl`, `tar`, `systemctl` — all present by default on Debian/Ubuntu. `fzf` is optional and the panel can offer to install it when multi-select removal is used.
+
+## Client Notes
+
+- Share URL tuning currently targets `Shadowrocket`, `v2rayN`, and `dae`
+- `dae` compatibility is considered only for protocols it documents; `ShadowTLS` is intentionally excluded from the `dae` target matrix
+- For self-signed certificates, the panel can embed `allowInsecure` / `insecure` flags directly in generated URLs
 
 ---
 

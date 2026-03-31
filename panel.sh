@@ -159,6 +159,88 @@ prompt_default_no() {
     [[ "${reply,,}" == "y" || "${reply,,}" == "yes" ]]
 }
 
+join_by() {
+    local separator="$1"
+    shift || true
+    local item output=""
+
+    for item in "$@"; do
+        if [[ -n "$output" ]]; then
+            output+="${separator}"
+        fi
+        output+="${item}"
+    done
+
+    printf '%s\n' "$output"
+}
+
+repeat_char() {
+    local char="$1" count="$2" output
+    printf -v output '%*s' "$count" ''
+    printf '%s' "${output// /$char}"
+}
+
+truncate_text() {
+    local text="$1" width="$2"
+    if (( width <= 3 )); then
+        printf '%.*s' "$width" "$text"
+    elif (( ${#text} > width )); then
+        printf '%s...' "${text:0:width-3}"
+    else
+        printf '%s' "$text"
+    fi
+}
+
+pad_cell() {
+    local text="$1" width="$2"
+    text="$(truncate_text "$text" "$width")"
+    printf '%-*s' "$width" "$text"
+}
+
+wrap_text_lines() {
+    local text="$1" width="$2"
+
+    if (( width <= 0 )); then
+        printf '%s\n' "$text"
+        return 0
+    fi
+
+    if [[ -z "$text" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    while [[ -n "$text" ]]; do
+        printf '%s\n' "${text:0:width}"
+        text="${text:width}"
+    done
+}
+
+terminal_columns() {
+    local cols
+    cols="$(tput cols 2>/dev/null || printf '120')"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=120
+    (( cols < 90 )) && cols=90
+    printf '%s\n' "$cols"
+}
+
+ensure_fzf_ready() {
+    if command_exists fzf; then
+        return 0
+    fi
+
+    warn "fzf is required for Tab multi-select."
+    prompt_default_yes "  Install fzf now?" || return 1
+
+    if command_exists apt-get; then
+        apt-get update
+        apt-get install -y fzf
+    else
+        error "Automatic fzf installation currently supports apt-get only."
+        return 1
+    fi
+}
+
 ensure_nft_ready() {
     if command_exists nft; then
         return 0
@@ -336,6 +418,11 @@ write_cert_index_entry() {
 cert_name_from_path() {
     local cert_path="$1"
     awk -F'|' -v cert_path="$cert_path" '$3 == cert_path { print $1; exit }' "$SHOES_CERT_INDEX" 2>/dev/null || true
+}
+
+cert_type_from_path() {
+    local cert_path="$1"
+    awk -F'|' -v cert_path="$cert_path" '$3 == cert_path { print $2; exit }' "$SHOES_CERT_INDEX" 2>/dev/null || true
 }
 
 create_self_signed_cert() {
@@ -602,12 +689,34 @@ port_in_use() {
 
 save_url() {
     local port="$1" label="$2" url="$3"
+    save_url_entries "$port" "$(url_entry "$label" "$url")"
+}
+
+url_entry() {
+    local label="$1" url="$2"
+    printf '%s|%s\n' "$label" "$url"
+}
+
+append_url_entry() {
+    local entries="$1" label="$2" url="$3"
+    if [[ -n "$entries" ]]; then
+        printf '%s\n%s|%s\n' "$entries" "$label" "$url"
+    else
+        url_entry "$label" "$url"
+    fi
+}
+
+save_url_entries() {
+    local port="$1" entries="$2"
     local tmp
 
     ensure_config_dirs
     tmp="$(mktemp)"
     grep -v "^${port}|" "$SHOES_URLS" >"$tmp" 2>/dev/null || true
-    printf '%s|%s|%s\n' "$port" "$label" "$url" >>"$tmp"
+    while IFS='|' read -r label url; do
+        [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+        printf '%s|%s|%s\n' "$port" "$label" "$url" >>"$tmp"
+    done <<< "$entries"
     mv "$tmp" "$SHOES_URLS"
 }
 
@@ -629,6 +738,11 @@ get_url_label() {
 get_url_value() {
     local port="$1"
     awk -F'|' -v port="$port" '$1 == port { print $3; exit }' "$SHOES_URLS" 2>/dev/null || true
+}
+
+get_url_entries() {
+    local port="$1"
+    awk -F'|' -v port="$port" '$1 == port { print $2 "|" $3 }' "$SHOES_URLS" 2>/dev/null || true
 }
 
 write_listener_file() {
@@ -659,7 +773,7 @@ restart_if_running() {
 }
 
 add_listener() {
-    local port="$1" label="$2" block="$3" url="$4"
+    local port="$1" label="$2" block="$3" url_entries="$4"
     local file backup_file backup_urls
 
     init_config
@@ -675,7 +789,7 @@ add_listener() {
     fi
 
     write_listener_file "$port" "$label" "$block"
-    save_url "$port" "$label" "$url"
+    save_url_entries "$port" "$url_entries"
 
     if ! reload_runtime_config; then
         rm -f "$file"
@@ -689,7 +803,7 @@ add_listener() {
 }
 
 remove_listener() {
-    local port="$1"
+    local port="$1" skip_restart="${2:-false}"
     local file backup_file backup_urls
 
     init_config
@@ -713,7 +827,7 @@ remove_listener() {
 
     rm -f "$backup_file" "$backup_urls"
     info "Removed listener on port $port."
-    restart_if_running
+    [[ "$skip_restart" == "true" ]] || restart_if_running
 }
 
 print_url() {
@@ -721,30 +835,157 @@ print_url() {
     echo -e "  ${BOLD}${label}${RESET}  ->  ${CYAN}${url}${RESET}"
 }
 
-list_listeners() {
-    local file port label url found=0
+listener_detail_rows() {
+    local file port entries line label url label_list url_list
+    local emitted
 
-    header "Configured listeners"
     init_config
 
     for file in "$SHOES_LISTENER_DIR"/*.yaml; do
         [[ -e "$file" ]] || continue
         port="$(basename "$file" .yaml)"
-        port="${port#0}"
-        port="${port:-0}"
-        label="$(get_url_label "$port")"
-        url="$(get_url_value "$port")"
+        port="$((10#$port))"
+        entries="$(get_url_entries "$port")"
+        emitted=0
 
-        if [[ -n "$url" ]]; then
-            print_url "${label:-port-${port}}" "$url"
-        else
-            echo "  0.0.0.0:${port}"
+        while IFS='|' read -r label url; do
+            [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+            printf '%s\t%s\t%s\n' "$port" "$label" "$url"
+            emitted=1
+        done <<< "$entries"
+
+        if (( emitted == 0 )); then
+            printf '%s\t%s\t%s\n' "$port" "listener-${port}" "0.0.0.0:${port}"
         fi
-        found=1
+    done
+}
+
+listener_select_rows() {
+    local file port entries label url
+    local -a labels urls
+
+    init_config
+
+    for file in "$SHOES_LISTENER_DIR"/*.yaml; do
+        [[ -e "$file" ]] || continue
+        port="$(basename "$file" .yaml)"
+        port="$((10#$port))"
+        entries="$(get_url_entries "$port")"
+        labels=()
+        urls=()
+
+        while IFS='|' read -r label url; do
+            [[ -n "${label:-}" && -n "${url:-}" ]] || continue
+            labels+=("$label")
+            urls+=("$url")
+        done <<< "$entries"
+
+        if (( ${#labels[@]} == 0 )); then
+            printf '%s\t%s\t%s\n' "$port" "listener-${port}" "0.0.0.0:${port}"
+        else
+            printf '%s\t%s\t%s\n' "$port" "$(join_by ', ' "${labels[@]}")" "$(join_by ' || ' "${urls[@]}")"
+        fi
+    done
+}
+
+print_listener_table() {
+    local rows="$1"
+    local cols port_w label_w url_w
+    local top_border header_row mid_border bottom_border
+    local idx row port label url max_lines line_idx
+    local -a row_list port_lines label_lines url_lines
+
+    cols="$(terminal_columns)"
+    port_w=6
+    label_w=26
+    url_w=$((cols - port_w - label_w - 10))
+    (( url_w < 40 )) && url_w=40
+
+    mapfile -t row_list <<< "$rows"
+
+    printf -v top_border '┌─%s─┬─%s─┬─%s─┐' \
+        "$(repeat_char '─' "$port_w")" \
+        "$(repeat_char '─' "$label_w")" \
+        "$(repeat_char '─' "$url_w")"
+    printf -v header_row '│ %s │ %s │ %s │' \
+        "$(pad_cell 'Port' "$port_w")" \
+        "$(pad_cell 'Profiles' "$label_w")" \
+        "$(pad_cell 'Share URLs' "$url_w")"
+    printf -v mid_border '├─%s─┼─%s─┼─%s─┤' \
+        "$(repeat_char '─' "$port_w")" \
+        "$(repeat_char '─' "$label_w")" \
+        "$(repeat_char '─' "$url_w")"
+    printf '%b%s%b\n' "${CYAN}" "$top_border" "${RESET}"
+    printf '%b%s%b\n' "${BOLD}${CYAN}" "$header_row" "${RESET}"
+    printf '%b%s%b\n' "${CYAN}" "$mid_border" "${RESET}"
+
+    for idx in "${!row_list[@]}"; do
+        row="${row_list[$idx]}"
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+
+        mapfile -t port_lines < <(wrap_text_lines "$port" "$port_w")
+        mapfile -t label_lines < <(wrap_text_lines "$label" "$label_w")
+        mapfile -t url_lines < <(wrap_text_lines "$url" "$url_w")
+        max_lines=${#port_lines[@]}
+        (( ${#label_lines[@]} > max_lines )) && max_lines=${#label_lines[@]}
+        (( ${#url_lines[@]} > max_lines )) && max_lines=${#url_lines[@]}
+
+        for ((line_idx = 0; line_idx < max_lines; line_idx++)); do
+            printf '│ %s │ %s │ %s │\n' \
+                "$(pad_cell "${port_lines[$line_idx]:-}" "$port_w")" \
+                "$(pad_cell "${label_lines[$line_idx]:-}" "$label_w")" \
+                "$(pad_cell "${url_lines[$line_idx]:-}" "$url_w")"
+        done
+
+        if (( idx < ${#row_list[@]} - 1 )); then
+            printf '%b%s%b\n' "${CYAN}" "$mid_border" "${RESET}"
+        fi
     done
 
-    if [[ $found -eq 0 ]]; then
+    printf -v bottom_border '└─%s─┴─%s─┴─%s─┘' \
+        "$(repeat_char '─' "$port_w")" \
+        "$(repeat_char '─' "$label_w")" \
+        "$(repeat_char '─' "$url_w")"
+    printf '%b%s%b\n' "${CYAN}" "$bottom_border" "${RESET}"
+}
+
+select_listener_ports_multi() {
+    local rows selection
+
+    ensure_fzf_ready || return 1
+    rows="$(listener_select_rows)"
+    [[ -n "$rows" ]] || {
         warn "No managed listeners found in $SHOES_LISTENER_DIR"
+        return 1
+    }
+
+    selection="$(printf '%s\n' "$rows" | fzf \
+        --multi \
+        --delimiter=$'\t' \
+        --with-nth=1,2,3 \
+        --bind='tab:toggle+down,btab:toggle+up' \
+        --prompt='Delete listeners > ' \
+        --header=$'TAB mark/unmark | ENTER delete selected ports | ESC cancel' \
+        --preview-window='down,60%,wrap' \
+        --preview='printf "Port: %s\nProfiles: %s\n\nShare URLs:\n%s\n" {1} {2} {3} | sed "s# || #\n#g"' \
+    )" || return 1
+
+    [[ -n "$selection" ]] || return 1
+    printf '%s\n' "$selection" | awk -F'\t' '{print $1}' | sort -u
+}
+
+list_listeners() {
+    local rows
+
+    header "Configured listeners"
+    rows="$(listener_detail_rows)"
+
+    if [[ -z "$rows" ]]; then
+        warn "No managed listeners found in $SHOES_LISTENER_DIR"
+    else
+        print_listener_table "$rows"
+        info "Each share URL is shown in full with wrapping. Rows are separated so you can verify generated links directly."
     fi
 
     if base_config_has_content; then
@@ -887,8 +1128,25 @@ prompt_host_for_share() {
     printf '%s\n' "${value:-$default}"
 }
 
+prompt_tls_insecure_share() {
+    local prompt="$1" default="$2" reply
+
+    read -rp "  ${prompt} [${default}]: " reply
+    case "${reply:-$default}" in
+        y|Y|yes|YES) printf 'true\n' ;;
+        *) printf 'false\n' ;;
+    esac
+}
+
+tls_share_extra_query() {
+    local insecure="${1:-false}"
+    if [[ "$insecure" == "true" ]]; then
+        printf '&allowInsecure=1&insecure=1&allow_insecure=1'
+    fi
+}
+
 prompt_existing_tls_inputs() {
-    local cert key server_name share_host default_host
+    local cert key server_name share_host default_host share_insecure
 
     read -rp "  TLS cert path: " cert
     read -rp "  TLS key path:  " key
@@ -904,16 +1162,18 @@ prompt_existing_tls_inputs() {
 
     default_host="$server_name"
     share_host="$(prompt_host_for_share "Host shown in share URL" "$default_host")"
+    share_insecure="$(prompt_tls_insecure_share "Set insecure/allowInsecure in share URL?" "n")"
 
-    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host" "$share_insecure"
 }
 
 prompt_managed_tls_inputs() {
-    local selection cert key detected_name server_name share_host
+    local selection cert key cert_type detected_name server_name share_host share_insecure default_insecure
 
     selection="$(select_managed_certificate)" || return 1
     cert="${selection%%|*}"
     key="${selection#*|}"
+    cert_type="$(cert_type_from_path "$cert")"
     detected_name="$(cert_name_from_path "$cert")"
     [[ -n "$detected_name" ]] || detected_name="$(certificate_common_name "$cert")"
     detected_name="${detected_name:-$(get_server_ip)}"
@@ -921,12 +1181,18 @@ prompt_managed_tls_inputs() {
     read -rp "  TLS server name (SNI / domain) [${detected_name}]: " server_name
     server_name="${server_name:-$detected_name}"
     share_host="$(prompt_host_for_share "Host shown in share URL" "$server_name")"
+    if [[ "$cert_type" == "self-signed" ]]; then
+        default_insecure="y"
+    else
+        default_insecure="n"
+    fi
+    share_insecure="$(prompt_tls_insecure_share "Set insecure/allowInsecure in share URL?" "$default_insecure")"
 
-    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host" "$share_insecure"
 }
 
 prompt_self_signed_tls_inputs() {
-    local server_name cert key share_host
+    local server_name cert key share_host share_insecure
     local -a cert_paths
 
     read -rp "  Common Name / SNI for self-signed cert: " server_name
@@ -939,13 +1205,14 @@ prompt_self_signed_tls_inputs() {
     cert="${cert_paths[0]}"
     key="${cert_paths[1]}"
     share_host="$(prompt_host_for_share "Host shown in share URL" "$server_name")"
+    share_insecure="$(prompt_tls_insecure_share "Set insecure/allowInsecure in share URL?" "y")"
 
     info "Self-signed certificate created at $cert" >&2
-    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$cert" "$key" "$server_name" "$share_host" "$share_insecure"
 }
 
 prompt_acme_tls_inputs() {
-    local domain email cert key share_host
+    local domain email cert key share_host share_insecure
     local -a cert_paths
 
     read -rp "  Domain for ACME certificate: " domain
@@ -961,9 +1228,10 @@ prompt_acme_tls_inputs() {
     cert="${cert_paths[0]}"
     key="${cert_paths[1]}"
     share_host="$(prompt_host_for_share "Host shown in share URL" "$domain")"
+    share_insecure="$(prompt_tls_insecure_share "Set insecure/allowInsecure in share URL?" "n")"
 
     info "Certificate installed at $cert" >&2
-    printf '%s\n%s\n%s\n%s\n' "$cert" "$key" "$domain" "$share_host"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$cert" "$key" "$domain" "$share_host" "$share_insecure"
 }
 
 prompt_tls_inputs() {
@@ -1000,7 +1268,7 @@ append_anchor() {
 }
 
 add_http() {
-    local port user pass block url host label
+    local port user pass block url url_entries host label
 
     header "Add HTTP proxy"
     port="$(prompt_port)"
@@ -1023,13 +1291,14 @@ add_http() {
         url="$(append_anchor "http://$(rawurlencode "$user"):$(rawurlencode "$pass")@${host}:${port}" "$label")"
     fi
 
-    add_listener "$port" "HTTP" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "HTTP" "$block" "$url_entries" || return 1
     info "HTTP proxy added on port $port."
     print_url "HTTP" "$url"
 }
 
 add_socks5() {
-    local port user pass block url host label udp_enabled
+    local port user pass block url url_entries host label udp_enabled
 
     header "Add SOCKS5 proxy"
     port="$(prompt_port)"
@@ -1055,13 +1324,14 @@ add_socks5() {
         url="$(append_anchor "socks5://$(rawurlencode "$user"):$(rawurlencode "$pass")@${host}:${port}" "$label")"
     fi
 
-    add_listener "$port" "SOCKS5" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "SOCKS5" "$block" "$url_entries" || return 1
     info "SOCKS5 proxy added on port $port."
     print_url "SOCKS5" "$url"
 }
 
 add_shadowsocks() {
-    local port cipher pass block host url userinfo label udp_enabled
+    local port cipher pass block host url url_entries userinfo label udp_enabled
 
     header "Add Shadowsocks proxy"
     port="$(prompt_port)"
@@ -1084,13 +1354,14 @@ add_shadowsocks() {
     userinfo="$(b64enc "${cipher}:${pass}")"
     url="$(append_anchor "ss://${userinfo}@${host}:${port}" "$label")"
 
-    add_listener "$port" "Shadowsocks" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "Shadowsocks" "$block" "$url_entries" || return 1
     info "Shadowsocks added on port $port."
     print_url "Shadowsocks" "$url"
 }
 
 add_shadowsocks2022() {
-    local port cipher pass block host url userinfo label udp_enabled
+    local port cipher pass block host url url_entries userinfo label udp_enabled
 
     header "Add Shadowsocks 2022 proxy"
     port="$(prompt_port)"
@@ -1125,23 +1396,26 @@ add_shadowsocks2022() {
     userinfo="$(b64enc "${cipher}:${pass}")"
     url="$(append_anchor "ss://${userinfo}@${host}:${port}" "$label")"
 
-    add_listener "$port" "SS2022(${cipher})" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "SS2022(${cipher})" "$block" "$url_entries" || return 1
     info "Shadowsocks 2022 added on port $port."
     print_url "SS2022(${cipher})" "$url"
 }
 
 add_trojan() {
-    local port pass cert key server_name share_host block url label
+    local port pass cert key server_name share_host share_insecure share_query block url url_entries label
 
     header "Add Trojan proxy"
     port="$(prompt_port)"
     pass="$(prompt_password)"
     mapfile -t tls_values < <(prompt_tls_inputs) || return 1
-    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    [[ ${#tls_values[@]} -ge 5 ]] || return 1
     cert="${tls_values[0]}"
     key="${tls_values[1]}"
     server_name="${tls_values[2]}"
     share_host="${tls_values[3]}"
+    share_insecure="${tls_values[4]}"
+    share_query="$(tls_share_extra_query "$share_insecure")"
     label="Trojan-${port}"
 
     block="- address: \"0.0.0.0:${port}\"
@@ -1156,15 +1430,16 @@ add_trojan() {
           type: trojan
           password: \"${pass}\""
 
-    url="$(append_anchor "trojan://$(rawurlencode "$pass")@${share_host}:${port}?security=tls&sni=$(rawurlencode "$server_name")&type=tcp" "$label")"
+    url="$(append_anchor "trojan://$(rawurlencode "$pass")@${share_host}:${port}?security=tls&sni=$(rawurlencode "$server_name")&type=tcp${share_query}" "$label")"
 
-    add_listener "$port" "Trojan" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "Trojan" "$block" "$url_entries" || return 1
     info "Trojan added on port $port."
     print_url "Trojan" "$url"
 }
 
 add_vmess() {
-    local port uuid cipher block url host label udp_enabled json
+    local port uuid cipher block url url_entries host label udp_enabled udp_enabled_vmess json
 
     header "Add VMess proxy"
     port="$(prompt_port)"
@@ -1185,27 +1460,31 @@ add_vmess() {
     user_id: ${uuid}
     udp_enabled: ${udp_enabled}"
 
-    json="$(printf '{"v":"2","ps":"%s","add":"%s","port":"%s","id":"%s","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":"","scy":"auto"}' "$label" "$host" "$port" "$uuid")"
+    [[ "$udp_enabled" == "true" ]] && udp_enabled_vmess="1" || udp_enabled_vmess="0"
+    json="$(printf '{"v":"2","ps":"%s","add":"%s","port":"%s","id":"%s","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":"","scy":"%s","udp":"%s"}' "$label" "$host" "$port" "$uuid" "$cipher" "$udp_enabled_vmess")"
     url="vmess://$(b64enc "$json")"
 
-    add_listener "$port" "VMess" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "VMess" "$block" "$url_entries" || return 1
     info "VMess added on port $port."
     print_url "VMess" "$url"
 }
 
 add_vless() {
-    local port uuid cert key server_name share_host block url label udp_enabled
+    local port uuid cert key server_name share_host share_insecure share_query block url url_entries label udp_enabled
 
     header "Add VLESS proxy"
     port="$(prompt_port)"
     uuid="$(prompt_uuid)"
     udp_enabled="$(prompt_udp_enabled_yaml)"
     mapfile -t tls_values < <(prompt_tls_inputs) || return 1
-    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    [[ ${#tls_values[@]} -ge 5 ]] || return 1
     cert="${tls_values[0]}"
     key="${tls_values[1]}"
     server_name="${tls_values[2]}"
     share_host="${tls_values[3]}"
+    share_insecure="${tls_values[4]}"
+    share_query="$(tls_share_extra_query "$share_insecure")"
     label="VLESS-${port}"
 
     block="- address: \"0.0.0.0:${port}\"
@@ -1221,15 +1500,16 @@ add_vless() {
           user_id: ${uuid}
           udp_enabled: ${udp_enabled}"
 
-    url="$(append_anchor "vless://${uuid}@${share_host}:${port}?encryption=none&security=tls&sni=$(rawurlencode "$server_name")&type=tcp" "$label")"
+    url="$(append_anchor "vless://${uuid}@${share_host}:${port}?encryption=none&security=tls&sni=$(rawurlencode "$server_name")&type=tcp${share_query}" "$label")"
 
-    add_listener "$port" "VLESS" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "VLESS" "$block" "$url_entries" || return 1
     info "VLESS added on port $port."
     print_url "VLESS" "$url"
 }
 
 add_vless_reality() {
-    local port uuid sni keypair_output private_key public_key short_id host share_host block url label udp_enabled
+    local port uuid sni keypair_output private_key public_key short_id host share_host block url url_entries label udp_enabled
 
     header "Add VLESS-Reality proxy"
     port="$(prompt_port)"
@@ -1267,26 +1547,29 @@ add_vless_reality() {
           user_id: ${uuid}
           udp_enabled: ${udp_enabled}"
 
-    url="$(append_anchor "vless://${uuid}@${share_host}:${port}?encryption=none&security=reality&pbk=$(rawurlencode "$public_key")&sid=$(rawurlencode "$short_id")&sni=$(rawurlencode "$sni")&flow=xtls-rprx-vision&type=tcp" "$label")"
+    url="$(append_anchor "vless://${uuid}@${share_host}:${port}?encryption=none&security=reality&pbk=$(rawurlencode "$public_key")&sid=$(rawurlencode "$short_id")&sni=$(rawurlencode "$sni")&flow=xtls-rprx-vision&type=tcp&headerType=none&fp=chrome" "$label")"
 
-    add_listener "$port" "VLESS-Reality" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "VLESS-Reality" "$block" "$url_entries" || return 1
     info "VLESS-Reality added on port $port."
     print_url "VLESS-Reality" "$url"
 }
 
 add_hysteria2() {
-    local port pass cert key server_name share_host block url label udp_enabled
+    local port pass cert key server_name share_host share_insecure share_query block url url_entries label udp_enabled
 
     header "Add Hysteria2 proxy"
     port="$(prompt_port)"
     pass="$(prompt_password)"
     udp_enabled="$(prompt_udp_enabled_yaml)"
     mapfile -t tls_values < <(prompt_tls_inputs) || return 1
-    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    [[ ${#tls_values[@]} -ge 5 ]] || return 1
     cert="${tls_values[0]}"
     key="${tls_values[1]}"
     server_name="${tls_values[2]}"
     share_host="${tls_values[3]}"
+    share_insecure="${tls_values[4]}"
+    share_query="$(tls_share_extra_query "$share_insecure")"
     label="Hysteria2-${port}"
 
     block="- address: \"0.0.0.0:${port}\"
@@ -1301,15 +1584,17 @@ add_hysteria2() {
     password: \"${pass}\"
     udp_enabled: ${udp_enabled}"
 
-    url="$(append_anchor "hysteria2://$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")" "$label")"
+    url="$(append_anchor "hysteria2://$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")${share_query}" "$label")"
+    url_entries="$(url_entry "$label" "$url")"
+    url_entries="$(append_url_entry "$url_entries" "HY2-${port}" "$(append_anchor "hy2://$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")${share_query}" "HY2-${port}")")"
 
-    add_listener "$port" "Hysteria2" "$block" "$url" || return 1
+    add_listener "$port" "Hysteria2" "$block" "$url_entries" || return 1
     info "Hysteria2 added on port $port."
     print_url "Hysteria2" "$url"
 }
 
 add_tuic() {
-    local port uuid pass cert key server_name share_host block url label udp_enabled
+    local port uuid pass cert key server_name share_host share_insecure share_query block url url_entries label udp_enabled
 
     header "Add TUIC v5 proxy"
     port="$(prompt_port)"
@@ -1317,11 +1602,13 @@ add_tuic() {
     pass="$(prompt_password)"
     udp_enabled="$(prompt_udp_enabled_yaml)"
     mapfile -t tls_values < <(prompt_tls_inputs) || return 1
-    [[ ${#tls_values[@]} -ge 4 ]] || return 1
+    [[ ${#tls_values[@]} -ge 5 ]] || return 1
     cert="${tls_values[0]}"
     key="${tls_values[1]}"
     server_name="${tls_values[2]}"
     share_host="${tls_values[3]}"
+    share_insecure="${tls_values[4]}"
+    share_query="$(tls_share_extra_query "$share_insecure")"
     label="TUIC-${port}"
 
     block="- address: \"0.0.0.0:${port}\"
@@ -1333,19 +1620,20 @@ add_tuic() {
       - h3
   protocol:
     type: tuic
-    user_id: ${uuid}
+    uuid: ${uuid}
     password: \"${pass}\"
     udp_enabled: ${udp_enabled}"
 
-    url="$(append_anchor "tuic://${uuid}:$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")" "$label")"
+    url="$(append_anchor "tuic://${uuid}:$(rawurlencode "$pass")@${share_host}:${port}?sni=$(rawurlencode "$server_name")&alpn=$(rawurlencode "h3")&udp_relay_mode=native&congestion_control=cubic${share_query}" "$label")"
 
-    add_listener "$port" "TUIC v5" "$block" "$url" || return 1
+    url_entries="$(url_entry "$label" "$url")"
+    add_listener "$port" "TUIC v5" "$block" "$url_entries" || return 1
     info "TUIC v5 added on port $port."
     print_url "TUIC v5" "$url"
 }
 
 add_shadowtls() {
-    local port pass sni host share_host block url label inner_choice inner_cipher inner_pass
+    local port pass sni host share_host block url url_entries label inner_choice inner_cipher inner_pass plugin_url plugin_value userinfo
 
     header "Add ShadowTLS v3 proxy"
     port="$(prompt_port)"
@@ -1397,8 +1685,13 @@ add_shadowtls() {
           password: \"${inner_pass}\""
 
     url="$(append_anchor "shadowtls://v3@${share_host}:${port}?password=$(rawurlencode "$pass")&sni=$(rawurlencode "$sni")&inner-ss-pass=$(rawurlencode "$inner_pass")&inner-cipher=$(rawurlencode "$inner_cipher")" "$label")"
+    url_entries="$(url_entry "$label" "$url")"
+    userinfo="$(b64enc "${inner_cipher}:${inner_pass}")"
+    plugin_value="$(rawurlencode "shadow-tls;version=3;host=${sni};password=${pass}")"
+    plugin_url="$(append_anchor "ss://${userinfo}@${share_host}:${port}/?plugin=${plugin_value}" "ShadowTLS-SS-${port}")"
+    url_entries="$(append_url_entry "$url_entries" "ShadowTLS-SS-${port}" "$plugin_url")"
 
-    add_listener "$port" "ShadowTLS-v3" "$block" "$url" || return 1
+    add_listener "$port" "ShadowTLS-v3" "$block" "$url_entries" || return 1
     info "ShadowTLS v3 added on port $port."
     print_url "ShadowTLS-v3" "$url"
 }
@@ -1444,10 +1737,25 @@ menu_add_protocol() {
 menu_remove_listener() {
     ensure_shoes_ready || return 1
     list_listeners
-    local port
-    read -rp "  Enter port to remove: " port
-    [[ "$port" =~ ^[0-9]+$ ]] || { warn "Not a valid port."; return 1; }
-    remove_listener "$port"
+    local removed=0 port
+    local -a ports=()
+
+    mapfile -t ports < <(select_listener_ports_multi) || return 1
+    (( ${#ports[@]} > 0 )) || return 0
+
+    printf '  Selected ports: %s\n' "$(join_by ', ' "${ports[@]}")"
+    prompt_default_no "  Delete ${#ports[@]} selected listener(s)?" || return 0
+
+    for port in "${ports[@]}"; do
+        if remove_listener "$port" true; then
+            ((removed++))
+        fi
+    done
+
+    if (( removed > 0 )); then
+        restart_if_running
+        info "Removed ${removed} listener(s)."
+    fi
 }
 
 menu_service() {

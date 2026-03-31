@@ -16,9 +16,13 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 若未安装 shoes，在添加协议或管理服务前会先提示安装
 - 自动写入 systemd 服务，开机自启
 - 交互式菜单管理代理协议：添加 / 删除 / 查看
+- 协议列表改成了带边框的表格显示，不再是一行一行散着输出
 - 变更后会先执行 `shoes --dry-run` 验证配置，失败则自动回滚
 - 添加协议后立即显示分享链接
 - 查看协议列表时同步展示分享链接，便于直接导入 Shadowrocket 等客户端
+- 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`，以及 ShadowTLS 的 `ss://...plugin=shadow-tls`
+- 分享链接目前优先针对 `Shadowrocket`、`v2rayN`、`dae` 调整；自签证书场景可以直接把 `allowInsecure` / `insecure` 带进链接
+- “删除协议” 现在使用 `fzf` 多选：按 `Tab` 勾选多个监听器，再按回车批量删除
 - 内置证书管理：
   - 在 `/etc/shoes/certs/` 生成自签证书
   - 用 `acme.sh` 的 standalone 模式申请 Let's Encrypt 证书
@@ -51,7 +55,13 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 ## 依赖
 
-目标系统需具备：`curl`、`tar`、`systemctl`（Debian/Ubuntu 默认已有）
+目标系统需具备：`curl`、`tar`、`systemctl`（Debian/Ubuntu 默认已有）。`fzf` 为可选依赖，使用多选删除时 panel 会提示安装。
+
+## 客户端说明
+
+- 当前分享链接优先按 `Shadowrocket`、`v2rayN`、`dae` 这三个客户端做兼容
+- `dae` 只纳入它文档里明确支持的协议，`ShadowTLS` 不在 `dae` 兼容目标内
+- 对自签证书场景，panel 可以直接把 `allowInsecure` / `insecure` 写进生成链接
 
 ---
 
