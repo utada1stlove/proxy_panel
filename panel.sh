@@ -1245,11 +1245,23 @@ select_share_rows_multi() {
     select_share_rows_prompt "$rows"
 }
 
-dae_supports_scheme() {
-    local scheme="$1"
+dae_supports_share_url() {
+    local url="$1" scheme
+    scheme="$(share_scheme "$url")"
+
     case "$scheme" in
-        http|https|socks4|socks4a|socks5|vmess|vless|ss|trojan|tuic|hysteria2|hy2)
+        vmess|vless|trojan|tuic|hysteria2|hy2)
             return 0
+            ;;
+        ss)
+            case "$url" in
+                *shadow-tls=*|*plugin=shadow-tls*|ss://2022-*)
+                    return 1
+                    ;;
+                *)
+                    return 0
+                    ;;
+            esac
             ;;
         *)
             return 1
@@ -1287,7 +1299,6 @@ print_subscription_text() {
     local rows="$1"
     local row port label url emitted=0
 
-    header "Subscription Text"
     while IFS= read -r row; do
         [[ -n "${row:-}" ]] || continue
         IFS=$'\t' read -r port label url <<< "$row"
@@ -1302,20 +1313,19 @@ print_dae_node_snippet() {
     local rows="$1"
     local row port label url scheme dae_url emitted=0
 
-    header "dae Node Snippet"
     printf 'node {\n'
     while IFS= read -r row; do
         [[ -n "${row:-}" ]] || continue
         IFS=$'\t' read -r port label url <<< "$row"
         scheme="$(share_scheme "$url")"
 
-        if dae_supports_scheme "$scheme"; then
+        if dae_supports_share_url "$url"; then
             dae_url="$(dae_uri_from_share "$url")"
             printf '  # %s\n' "$label"
             printf "  '%s'\n" "$dae_url"
             emitted=1
         else
-            printf '  # skipped: %s (%s is outside current dae target matrix)\n' "$label" "$scheme"
+            printf '  # skipped: %s (%s is outside the current dae live-verified matrix)\n' "$label" "$scheme"
         fi
     done <<< "$rows"
     printf '}\n'
@@ -1329,7 +1339,6 @@ print_dae_minimal_config() {
 
     rows_require_insecure "$rows" && allow_insecure=true
 
-    header "dae Minimal Config"
     cat <<EOF
 global {
   tproxy_port: 12345
@@ -1350,12 +1359,12 @@ EOF
         IFS=$'\t' read -r port label url <<< "$row"
         scheme="$(share_scheme "$url")"
 
-        if dae_supports_scheme "$scheme"; then
+        if dae_supports_share_url "$url"; then
             dae_url="$(dae_uri_from_share "$url")"
             printf "  '%s'\n" "$dae_url"
             emitted=1
         else
-            printf '  # skipped: %s (%s is outside current dae target matrix)\n' "$label" "$scheme"
+            printf '  # skipped: %s (%s is outside the current dae live-verified matrix)\n' "$label" "$scheme"
         fi
     done <<< "$rows"
 

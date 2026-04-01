@@ -16,21 +16,28 @@ Use the panel's `Share links / QR` menu to reopen the exact URI and QR for the l
 
 | Protocol | Shadowrocket | v2rayN | dae | Notes |
 |---|---|---|---|---|
-| HTTP | pending | pending | n/a | dae target focuses on proxy URIs it explicitly documents. |
+| HTTP | pending | pending | n/a | dae target focuses on live-verified URI exports only. |
 | SOCKS5 | pending | pending | n/a | dae target matrix currently excludes raw SOCKS import checks here. |
-| Shadowsocks | pending | pending | pending | Use SIP002 Base64URL userinfo export. |
-| Shadowsocks 2022 | pending | pending | pending | Use plain AEAD-2022 `method:password@host:port`. |
-| Trojan (TLS) | pending | pending | pending | Self-signed mode should preserve `allowInsecure=1&insecure=1`. |
-| VMess | pending | pending | pending | Verify Base64 JSON import stays intact after QR scan. |
-| VLESS (TLS) | pending | pending | pending | Confirm `sni` survives import. |
-| VLESS-Reality | pending | pending | pending | Check `pbk`, `sid`, `fp`, `flow`, `sni`. |
+| Shadowsocks | pending | pending | pass | Live dae check passed with SIP002 Base64URL userinfo export. |
+| Shadowsocks 2022 | pending | pending | fail | dae v1.0.0 rejected `2022-blake3-aes-256-gcm` as unsupported. |
+| Trojan (TLS) | pending | pending | pass | Self-signed mode preserved `allowInsecure=1&insecure=1` and connected. |
+| VMess | pending | pending | pass | dae imported the Base64 JSON URI and established live traffic. |
+| VLESS (TLS) | pending | pending | pass | dae preserved `sni` and established live traffic. |
+| VLESS-Reality | pending | pending | pass | Live dae check passed with `pbk`, `sid`, `fp`, `flow`, `sni`. |
 | ShadowTLS native | pending | pending | n/a | Not part of dae target matrix. |
 | ShadowTLS standalone | pending | pending | n/a | Check Shadowrocket combined `shadow-tls=` URI first. |
-| Hysteria2 / HY2 | pending | pending | pending | Verify both `hysteria2://` and `hy2://` behavior where relevant. |
-| TUIC v5 | pending | pending | pending | Check `alpn=h3`, `udp_relay_mode=native`, `congestion_control=cubic`. |
+| Hysteria2 / HY2 | pending | pending | pass | dae accepted the exported `hy2://` URI after the panel converted it to `hysteria2://`. |
+| TUIC v5 | pending | pending | pass | Live dae check passed with `alpn=h3`, `udp_relay_mode=native`, `congestion_control=cubic`. |
 
 ## Per-Run Notes
 
 | Date | Client | Protocol | Result | Notes |
 |---|---|---|---|---|
-| _pending_ |  |  |  |  |
+| 2026-04-01 | dae | Shadowsocks | pass | Live traffic on `hk` VPS via temp `dae v1.0.0` and temp `shoes v0.2.7`; same-host harness added `pname(shoes) -> direct`. |
+| 2026-04-01 | dae | Shadowsocks 2022 | fail | dae log: `unsupported shadowsocks encryption method: 2022-blake3-aes-256-gcm`; panel export now skips SS2022 for dae snippets/configs. |
+| 2026-04-01 | dae | VMess | pass | `curl https://ifconfig.me/ip` returned `43.99.71.31`; log showed `dialer=VMess-32004`. |
+| 2026-04-01 | dae | Trojan (TLS) | pass | `curl https://ifconfig.me/ip` returned `43.99.71.31`; log showed `dialer=Trojan-32005`. |
+| 2026-04-01 | dae | VLESS (TLS) | pass | `curl https://ifconfig.me/ip` returned `43.99.71.31`; log showed `dialer=VLESS-32006`. |
+| 2026-04-01 | dae | VLESS-Reality | pass | `curl https://ifconfig.me/ip` returned `43.99.71.31`; log showed `dialer=VLESS-Reality-32007`. |
+| 2026-04-01 | dae | Hysteria2 / HY2 | pass | `curl https://ifconfig.me/ip` returned `43.99.71.31`; log showed `dialer=HY2-32008`. |
+| 2026-04-01 | dae | TUIC v5 | pass | `curl https://ifconfig.me/ip` returned `43.99.71.31`; log showed `dialer=TUIC-32009`. |

@@ -29,7 +29,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 - SIP002 export has been tightened: classic Shadowsocks uses Base64URL userinfo, while AEAD-2022 exports plain percent-encoded `method:password`
 - `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
 - `Share links / QR` also supports multi-select; with `fzf` installed you can pick one or more links and print just those share cards and QR codes
-- The same menu can export selected links as plain subscription text for v2rayN, as a dae-friendly `node { ... }` snippet, or as a minimal runnable dae config that skips unsupported entries such as `ShadowTLS`
+- The same menu can export selected links as plain subscription text for v2rayN, as a dae-friendly `node { ... }` snippet, or as a minimal runnable dae config that skips entries outside the current dae live-verified matrix such as `ShadowTLS` and `SS2022`
 - Manages TLS certificates:
   - create self-signed certs under `/etc/shoes/certs/`
   - issue Let's Encrypt certs with `acme.sh` standalone mode
@@ -69,7 +69,8 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 ## Client Notes
 
 - Share URL tuning currently targets `Shadowrocket`, `v2rayN`, and `dae`
-- `dae` compatibility is considered only for protocols it documents; `ShadowTLS` is intentionally excluded from the `dae` target matrix
+- `dae` compatibility is now limited to the protocols we live-verified on `hk`: classic `Shadowsocks`, `VMess`, `Trojan`, `VLESS`, `VLESS-Reality`, `Hysteria2/HY2`, and `TUIC`
+- `ShadowTLS` is intentionally excluded from the `dae` target matrix, and `SS2022` is skipped because current `dae v1.0.0` rejected the exported AEAD-2022 cipher during live testing
 - `Share links / QR` can print selected URIs as one-link-per-line subscription text, generate a dae `node { ... }` snippet, or output a minimal dae config for the current selection
 - For self-signed certificates, the panel can embed `allowInsecure` / `insecure` flags directly in generated URLs
 - `Hysteria2` uses the official `/?query` URI form; `TUIC` keeps `allow_insecure` for dae-style import while also emitting `insecure`
