@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 表格现在只负责总览，完整导入链接会在下方再输出成独立的 “Share Details” 分享块
 - 变更后会先执行 `shoes --dry-run` 验证配置，失败则自动回滚
 - 添加协议后会立即用独立分享块展示生成链接
-- 新增了独立的 `Share links / QR` 菜单，可以只挑指定协议的分享链接和二维码单独查看
+- 新增了独立的 `Share links / QR` 菜单，可以只挑指定协议的分享链接和二维码单独查看，也可以直接导出面向客户端的片段
 - 长分享链接不再按固定宽度生硬截断，而是优先按 `@`、`?`、`&`、`#` 这些分隔符换行
 - 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`
 - 分享块里的链接现在会按单行原始串输出，方便直接复制，不再把真正的 URL 人工切断
@@ -29,6 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - SIP002 导出也收紧了：普通 Shadowsocks 改用 Base64URL userinfo，AEAD-2022 则按明文 `method:password` 百分号编码导出
 - “删除协议” 现在使用 `fzf` 多选：按 `Tab` 勾选多个监听器，再按回车批量删除
 - `Share links / QR` 也支持多选；装了 `fzf` 后可以只挑某几个链接来显示分享块和二维码
+- 同一个菜单还可以把选中的链接导出成 `v2rayN` 这种一行一个 URI 的订阅文本，或生成 dae 可直接粘贴的 `node { ... }` 片段；`ShadowTLS` 这类不在 dae 目标里的协议会自动跳过
 - 内置证书管理：
   - 在 `/etc/shoes/certs/` 生成自签证书
   - 用 `acme.sh` 的 standalone 模式申请 Let's Encrypt 证书
@@ -69,6 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 - 当前分享链接优先按 `Shadowrocket`、`v2rayN`、`dae` 这三个客户端做兼容
 - `dae` 只纳入它文档里明确支持的协议，`ShadowTLS` 不在 `dae` 兼容目标内
+- `Share links / QR` 现在可以直接把选中的链接导出成订阅文本或 dae `node { ... }` 片段，方便手工现网回归
 - 对自签证书场景，panel 可以直接把 `allowInsecure` / `insecure` 写进生成链接
 - `Hysteria2` 现在使用官方推荐的 `/?query` 形式，`TUIC` 则保留 `allow_insecure` 以兼顾 dae 风格导入，同时输出 `insecure`
 

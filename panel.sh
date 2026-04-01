@@ -1245,6 +1245,67 @@ select_share_rows_multi() {
     select_share_rows_prompt "$rows"
 }
 
+dae_supports_scheme() {
+    local scheme="$1"
+    case "$scheme" in
+        http|https|socks4|socks4a|socks5|vmess|vless|ss|trojan|tuic|hysteria2|hy2)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+dae_uri_from_share() {
+    local url="$1"
+    if [[ "$url" == hy2://* ]]; then
+        printf 'hysteria2://%s\n' "${url#hy2://}"
+    else
+        printf '%s\n' "$url"
+    fi
+}
+
+print_subscription_text() {
+    local rows="$1"
+    local row port label url emitted=0
+
+    header "Subscription Text"
+    while IFS= read -r row; do
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+        printf '%s\n' "$url"
+        emitted=1
+    done <<< "$rows"
+
+    (( emitted == 1 )) || warn "No share URLs selected."
+}
+
+print_dae_node_snippet() {
+    local rows="$1"
+    local row port label url scheme dae_url emitted=0
+
+    header "dae Node Snippet"
+    printf 'node {\n'
+    while IFS= read -r row; do
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+        scheme="$(share_scheme "$url")"
+
+        if dae_supports_scheme "$scheme"; then
+            dae_url="$(dae_uri_from_share "$url")"
+            printf '  # %s\n' "$label"
+            printf "  '%s'\n" "$dae_url"
+            emitted=1
+        else
+            printf '  # skipped: %s (%s is outside current dae target matrix)\n' "$label" "$scheme"
+        fi
+    done <<< "$rows"
+    printf '}\n'
+
+    (( emitted == 1 )) || warn "No dae-compatible share URLs selected."
+}
+
 print_listener_table() {
     local rows="$1"
     local cols port_w label_w url_w
@@ -1353,6 +1414,12 @@ list_listeners() {
 
 menu_share_links() {
     local rows selected
+    local options=(
+        "Show share cards / QR"
+        "Export subscription text"
+        "Export dae node snippet"
+        "Back"
+    )
 
     ensure_shoes_ready || return 1
     rows="$(share_catalog_rows)"
@@ -1361,8 +1428,34 @@ menu_share_links() {
         return 1
     }
 
-    selected="$(select_share_rows_multi "$rows")" || return 1
-    print_share_details "$selected" "true"
+    while true; do
+        header "Share links / QR"
+        select choice in "${options[@]}"; do
+            case "$choice" in
+                "Show share cards / QR")
+                    selected="$(select_share_rows_multi "$rows")" || break
+                    print_share_details "$selected" "true"
+                    break
+                    ;;
+                "Export subscription text")
+                    selected="$(select_share_rows_multi "$rows")" || break
+                    print_subscription_text "$selected"
+                    break
+                    ;;
+                "Export dae node snippet")
+                    selected="$(select_share_rows_multi "$rows")" || break
+                    print_dae_node_snippet "$selected"
+                    break
+                    ;;
+                "Back")
+                    return 0
+                    ;;
+                *)
+                    warn "Invalid selection."
+                    ;;
+            esac
+        done
+    done
 }
 
 write_service() {

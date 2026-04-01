@@ -2,7 +2,10 @@
 
 This file records the current export targets for `proxy_panel` before full live-client regression.
 
-Use the panel's `Share links / QR` menu when you need to re-open only a specific protocol URI during manual client checks.
+Use the panel's `Share links / QR` menu when you need to re-open only a specific protocol URI during manual client checks. The same menu can also export:
+
+- one URI per line for v2rayN-style subscription text
+- a dae `node { ... }` snippet for dae-supported protocols
 
 Write actual test results into [client-regression-log.md](./client-regression-log.md).
 
