@@ -59,6 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 |------|------|
 | `panel.sh` | 主脚本，负责安装 shoes、管理监听器、证书、UDP 防火墙、验证配置和查看日志 |
 | `docs/client-regression.md` | 当前 Shadowrocket / v2rayN / dae 的目标矩阵与手工回归清单 |
+| `docs/client-regression-log.md` | 真实客户端导入、握手、连通性回归的记录表 |
 
 ## 依赖
 

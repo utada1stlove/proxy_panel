@@ -59,6 +59,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 |------|-------------|
 | `panel.sh` | Main script — installs `shoes`, manages listeners, certificates, UDP firewall rules, validates config, and shows logs |
 | `docs/client-regression.md` | Current target matrix and manual regression checklist for Shadowrocket / v2rayN / dae |
+| `docs/client-regression-log.md` | Live tracker for real client import / handshake / connectivity results |
 
 ## Requirements
 

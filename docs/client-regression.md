@@ -4,6 +4,8 @@ This file records the current export targets for `proxy_panel` before full live-
 
 Use the panel's `Share links / QR` menu when you need to re-open only a specific protocol URI during manual client checks.
 
+Write actual test results into [client-regression-log.md](./client-regression-log.md).
+
 ## Target Clients
 
 | Client | Current Focus | Notes |
