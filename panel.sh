@@ -1255,7 +1255,7 @@ dae_supports_share_url() {
             ;;
         ss)
             case "$url" in
-                *shadow-tls=*|*plugin=shadow-tls*|ss://2022-*)
+                *shadow-tls=*|*plugin=shadow-tls*)
                     return 1
                     ;;
                 *)
@@ -1325,7 +1325,7 @@ print_dae_node_snippet() {
             printf "  '%s'\n" "$dae_url"
             emitted=1
         else
-            printf '  # skipped: %s (%s is outside the current dae live-verified matrix)\n' "$label" "$scheme"
+            printf '  # skipped: %s (%s is outside the current dae export target)\n' "$label" "$scheme"
         fi
     done <<< "$rows"
     printf '}\n'
@@ -1364,7 +1364,7 @@ EOF
             printf "  '%s'\n" "$dae_url"
             emitted=1
         else
-            printf '  # skipped: %s (%s is outside the current dae live-verified matrix)\n' "$label" "$scheme"
+            printf '  # skipped: %s (%s is outside the current dae export target)\n' "$label" "$scheme"
         fi
     done <<< "$rows"
 
