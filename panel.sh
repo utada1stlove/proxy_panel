@@ -915,14 +915,14 @@ append_url_entry() {
 
 save_url_entries() {
     local port="$1" entries="$2"
-    local tmp
+    local tmp entry_label entry_url
 
     ensure_config_dirs
     tmp="$(mktemp)"
     grep -v "^${port}|" "$SHOES_URLS" >"$tmp" 2>/dev/null || true
-    while IFS='|' read -r label url; do
-        [[ -n "${label:-}" && -n "${url:-}" ]] || continue
-        printf '%s|%s|%s\n' "$port" "$label" "$url" >>"$tmp"
+    while IFS='|' read -r entry_label entry_url; do
+        [[ -n "${entry_label:-}" && -n "${entry_url:-}" ]] || continue
+        printf '%s|%s|%s\n' "$port" "$entry_label" "$entry_url" >>"$tmp"
     done <<< "$entries"
     mv "$tmp" "$SHOES_URLS"
 }
