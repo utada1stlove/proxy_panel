@@ -6,6 +6,7 @@ Use the panel's `Share links / QR` menu when you need to re-open only a specific
 
 - one URI per line for v2rayN-style subscription text
 - a dae `node { ... }` snippet for dae-supported protocols
+- a minimal dae config for Linux-side verification of the selected nodes
 
 Write actual test results into [client-regression-log.md](./client-regression-log.md).
 

@@ -1266,6 +1266,23 @@ dae_uri_from_share() {
     fi
 }
 
+rows_require_insecure() {
+    local rows="$1"
+    local row port label url
+
+    while IFS= read -r row; do
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+        case "$url" in
+            *allowInsecure=1*|*allow_insecure=1*|*insecure=1*)
+                return 0
+                ;;
+        esac
+    done <<< "$rows"
+
+    return 1
+}
+
 print_subscription_text() {
     local rows="$1"
     local row port label url emitted=0
@@ -1302,6 +1319,59 @@ print_dae_node_snippet() {
         fi
     done <<< "$rows"
     printf '}\n'
+
+    (( emitted == 1 )) || warn "No dae-compatible share URLs selected."
+}
+
+print_dae_minimal_config() {
+    local rows="$1"
+    local row port label url scheme dae_url emitted=0 allow_insecure=false
+
+    rows_require_insecure "$rows" && allow_insecure=true
+
+    header "dae Minimal Config"
+    cat <<EOF
+global {
+  tproxy_port: 12345
+  log_level: info
+  wan_interface: auto
+  auto_config_kernel_parameter: true
+  tcp_check_url: 'http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111'
+  udp_check_dns: 'dns.google:53,8.8.8.8,2001:4860:4860::8888'
+  dial_mode: domain
+  allow_insecure: ${allow_insecure}
+}
+
+node {
+EOF
+
+    while IFS= read -r row; do
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+        scheme="$(share_scheme "$url")"
+
+        if dae_supports_scheme "$scheme"; then
+            dae_url="$(dae_uri_from_share "$url")"
+            printf "  '%s'\n" "$dae_url"
+            emitted=1
+        else
+            printf '  # skipped: %s (%s is outside current dae target matrix)\n' "$label" "$scheme"
+        fi
+    done <<< "$rows"
+
+    cat <<'EOF'
+}
+
+group {
+  test_group {
+    policy: fixed(0)
+  }
+}
+
+routing {
+  fallback: test_group
+}
+EOF
 
     (( emitted == 1 )) || warn "No dae-compatible share URLs selected."
 }
@@ -1418,6 +1488,7 @@ menu_share_links() {
         "Show share cards / QR"
         "Export subscription text"
         "Export dae node snippet"
+        "Export minimal dae config"
         "Back"
     )
 
@@ -1445,6 +1516,11 @@ menu_share_links() {
                 "Export dae node snippet")
                     selected="$(select_share_rows_multi "$rows")" || break
                     print_dae_node_snippet "$selected"
+                    break
+                    ;;
+                "Export minimal dae config")
+                    selected="$(select_share_rows_multi "$rows")" || break
+                    print_dae_minimal_config "$selected"
                     break
                     ;;
                 "Back")
