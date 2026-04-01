@@ -23,7 +23,7 @@ Write actual test results into [client-regression-log.md](./client-regression-lo
 | Protocol | Current Export Rule |
 |---|---|
 | Shadowsocks | Use SIP002 style `ss://<Base64URL(method:password)>@host:port#tag` |
-| Shadowsocks 2022 | Use plain SIP002 AEAD-2022 userinfo: `ss://method:password@host:port#tag` |
+| Shadowsocks 2022 | Export `method:password` as a standard Base64 userinfo block: `ss://BASE64(method:password)@host:port#tag` |
 | ShadowTLS | Two modes now exist: `shoes` native single-port mode, or `Shadowrocket` standalone mode with a separate SS2022 backend port and a `shadow-tls=` combined link |
 | Trojan / VLESS over TLS | Self-signed mode uses `allowInsecure=1&insecure=1` |
 | Hysteria2 / HY2 | Use `hysteria2://` and `hy2://`, include `/?` before query, self-signed mode uses `insecure=1` |
@@ -40,7 +40,7 @@ Write actual test results into [client-regression-log.md](./client-regression-lo
 Notes:
 
 - Same-host dae checks needed `pname(shoes) -> direct` in the test harness so the local `shoes` server did not proxy its own outbound traffic back into dae.
-- The earlier `dae v1.0.0` harness rejected `SS2022` with `unsupported shadowsocks encryption method: 2022-blake3-aes-256-gcm`. Per your upstream note about `dae` PR `#936`, the panel no longer filters `SS2022` out of dae exports and emits the normal `ss://method:password@host:port` URL again.
+- The earlier `dae v1.0.0` harness rejected `SS2022` with `unsupported shadowsocks encryption method: 2022-blake3-aes-256-gcm`. Per your upstream note about `dae` PR `#936`, the panel no longer filters `SS2022` out of dae exports and now emits the `ss://BASE64(method:password)@host:port` form again.
 
 ## Manual Regression Checklist
 

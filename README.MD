@@ -26,7 +26,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 - Share blocks now print a single raw URL line for direct copy instead of inserting hard line breaks into the link itself
 - Share URLs are now tuned primarily for Shadowrocket, v2rayN, and dae; self-signed TLS flows can include `allowInsecure` / `insecure` flags directly in the URL
 - `ShadowTLS` now asks which mode you want: `shoes` native single-port mode, or Shadowrocket-style standalone mode with a separate SS2022 backend port
-- SIP002 export has been tightened: classic Shadowsocks uses Base64URL userinfo, while AEAD-2022 exports plain percent-encoded `method:password`
+- Shadowsocks export now follows the panel's current compatibility format: classic Shadowsocks uses Base64URL userinfo, while `SS2022` exports `method:password` as a standard Base64 userinfo block
 - `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
 - `Share links / QR` also supports multi-select; with `fzf` installed you can pick one or more links and print just those share cards and QR codes
 - The same menu can export selected links as plain subscription text for v2rayN, as a dae-friendly `node { ... }` snippet, or as a minimal runnable dae config that skips entries outside the current dae export target such as `ShadowTLS`
@@ -70,7 +70,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 
 - Share URL tuning currently targets `Shadowrocket`, `v2rayN`, and `dae`
 - `dae` export currently targets classic `Shadowsocks`, `SS2022`, `VMess`, `Trojan`, `VLESS`, `VLESS-Reality`, `Hysteria2/HY2`, and `TUIC`
-- `ShadowTLS` is intentionally excluded from the `dae` target matrix; `SS2022` is exported as the normal `ss://method:password@host:port` URL
+- `ShadowTLS` is intentionally excluded from the `dae` target matrix; `SS2022` is exported as `ss://BASE64(method:password)@host:port`
 - `Share links / QR` can print selected URIs as one-link-per-line subscription text, generate a dae `node { ... }` snippet, or output a minimal dae config for the current selection
 - For self-signed certificates, the panel can embed `allowInsecure` / `insecure` flags directly in generated URLs
 - `Hysteria2` uses the official `/?query` URI form; `TUIC` keeps `allow_insecure` for dae-style import while also emitting `insecure`

@@ -19,7 +19,7 @@ Use the panel's `Share links / QR` menu to reopen the exact URI and QR for the l
 | HTTP | pending | pending | n/a | dae target focuses on live-verified URI exports only. |
 | SOCKS5 | pending | pending | n/a | dae target matrix currently excludes raw SOCKS import checks here. |
 | Shadowsocks | pending | pending | pass | Live dae check passed with SIP002 Base64URL userinfo export. |
-| Shadowsocks 2022 | pending | pending | pending | Exported as the normal AEAD-2022 `ss://method:password@host:port` URL again; re-check on a post-PR936 dae build when convenient. |
+| Shadowsocks 2022 | pending | pending | pending | Exported as `ss://BASE64(method:password)@host:port`; re-check on a post-PR936 dae build when convenient. |
 | Trojan (TLS) | pending | pending | pass | Self-signed mode preserved `allowInsecure=1&insecure=1` and connected. |
 | VMess | pending | pending | pass | dae imported the Base64 JSON URI and established live traffic. |
 | VLESS (TLS) | pending | pending | pass | dae preserved `sni` and established live traffic. |

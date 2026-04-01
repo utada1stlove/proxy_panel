@@ -101,7 +101,8 @@ ss_userinfo_uri() {
     local cipher="$1" pass="$2"
 
     if [[ "$cipher" == 2022-* ]]; then
-        printf '%s:%s\n' "$(rawurlencode "$cipher")" "$(rawurlencode "$pass")"
+        b64stdenc "${cipher}:${pass}"
+        printf '\n'
     else
         b64urlenc "${cipher}:${pass}"
         printf '\n'
