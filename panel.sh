@@ -367,7 +367,7 @@ print_share_card() {
 }
 
 print_share_details() {
-    local rows="$1"
+    local rows="$1" show_qr="${2:-false}"
     local row port label url
     local emitted=0
 
@@ -375,7 +375,7 @@ print_share_details() {
     while IFS= read -r row; do
         [[ -n "${row:-}" ]] || continue
         IFS=$'\t' read -r port label url <<< "$row"
-        print_share_card "$port" "$label" "$url"
+        print_share_card "$port" "$label" "$url" "$show_qr"
         emitted=1
     done <<< "$rows"
 
@@ -1180,6 +1180,71 @@ listener_select_rows() {
     done
 }
 
+share_catalog_rows() {
+    local row port label url scheme endpoint
+
+    while IFS= read -r row; do
+        [[ -n "${row:-}" ]] || continue
+        IFS=$'\t' read -r port label url <<< "$row"
+        scheme="$(share_scheme "$url")"
+        endpoint="$(share_endpoint "$url")"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$port" "$label" "$scheme" "$endpoint" "$url"
+    done < <(listener_detail_rows)
+}
+
+select_share_rows_prompt() {
+    local rows="$1" selection token index
+    local -a row_list selected_rows
+
+    mapfile -t row_list <<< "$rows"
+    [[ ${#row_list[@]} -gt 0 ]] || return 1
+
+    header "Share links"
+    for index in "${!row_list[@]}"; do
+        IFS=$'\t' read -r port label scheme endpoint url <<< "${row_list[$index]}"
+        printf '  %d) [%s] %s  (%s, %s)\n' "$((index + 1))" "$port" "$label" "$scheme" "$endpoint"
+    done
+
+    read -rp "  Select share # (comma-separated): " selection
+    [[ -n "${selection// }" ]] || return 1
+
+    IFS=',' read -r -a tokens <<< "$selection"
+    for token in "${tokens[@]}"; do
+        token="${token//[[:space:]]/}"
+        [[ "$token" =~ ^[0-9]+$ ]] || { warn "Invalid selection: $token"; return 1; }
+        (( token >= 1 && token <= ${#row_list[@]} )) || { warn "Invalid selection: $token"; return 1; }
+        selected_rows+=("${row_list[$((token - 1))]}")
+    done
+
+    for row in "${selected_rows[@]}"; do
+        IFS=$'\t' read -r port label scheme endpoint url <<< "$row"
+        printf '%s\t%s\t%s\n' "$port" "$label" "$url"
+    done
+}
+
+select_share_rows_multi() {
+    local rows="$1" selection
+
+    if command_exists fzf; then
+        selection="$(printf '%s\n' "$rows" | fzf \
+            --multi \
+            --delimiter=$'\t' \
+            --with-nth=1,2,3,4 \
+            --bind='tab:toggle+down,btab:toggle+up' \
+            --prompt='Share links > ' \
+            --header=$'TAB mark/unmark | ENTER show selected shares | ESC cancel' \
+            --preview-window='down,70%,wrap' \
+            --preview='printf "Port: %s\nLabel: %s\nScheme: %s\nEndpoint: %s\n\nCopy URL:\n%s\n" {1} {2} {3} {4} {5}' \
+        )" || return 1
+        [[ -n "$selection" ]] || return 1
+        printf '%s\n' "$selection" | awk -F'\t' '{print $1 "\t" $2 "\t" $5}'
+        return 0
+    fi
+
+    warn "fzf is not installed. Falling back to numbered selection."
+    select_share_rows_prompt "$rows"
+}
+
 print_listener_table() {
     local rows="$1"
     local cols port_w label_w url_w
@@ -1284,6 +1349,20 @@ list_listeners() {
     if base_config_has_content; then
         warn "Additional unmanaged entries exist in $SHOES_BASE_CONFIG and are not listed here."
     fi
+}
+
+menu_share_links() {
+    local rows selected
+
+    ensure_shoes_ready || return 1
+    rows="$(share_catalog_rows)"
+    [[ -n "$rows" ]] || {
+        warn "No managed share links found."
+        return 1
+    }
+
+    selected="$(select_share_rows_multi "$rows")" || return 1
+    print_share_details "$selected" "true"
 }
 
 write_service() {
@@ -2383,6 +2462,7 @@ main_menu() {
             "Install / Upgrade shoes"
             "Add protocol"
             "List protocols"
+            "Share links / QR"
             "Remove protocol"
             "Certificates"
             "UDP firewall"
@@ -2403,6 +2483,10 @@ main_menu() {
                     ;;
                 "List protocols")
                     ensure_shoes_ready && list_listeners
+                    break
+                    ;;
+                "Share links / QR")
+                    menu_share_links
                     break
                     ;;
                 "Remove protocol")

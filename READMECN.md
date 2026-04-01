@@ -20,6 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - 表格现在只负责总览，完整导入链接会在下方再输出成独立的 “Share Details” 分享块
 - 变更后会先执行 `shoes --dry-run` 验证配置，失败则自动回滚
 - 添加协议后会立即用独立分享块展示生成链接
+- 新增了独立的 `Share links / QR` 菜单，可以只挑指定协议的分享链接和二维码单独查看
 - 长分享链接不再按固定宽度生硬截断，而是优先按 `@`、`?`、`&`、`#` 这些分隔符换行
 - 某些协议会同时保存多条兼容导入链接，例如 `hysteria2://` + `hy2://`
 - 分享块里的链接现在会按单行原始串输出，方便直接复制，不再把真正的 URL 人工切断
@@ -27,6 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 - `ShadowTLS` 现在会先询问你是否需要独立的 SS2022 后端端口，再决定走 `shoes` 原生单端口模式，还是走 Shadowrocket 风格的 standalone 模式
 - SIP002 导出也收紧了：普通 Shadowsocks 改用 Base64URL userinfo，AEAD-2022 则按明文 `method:password` 百分号编码导出
 - “删除协议” 现在使用 `fzf` 多选：按 `Tab` 勾选多个监听器，再按回车批量删除
+- `Share links / QR` 也支持多选；装了 `fzf` 后可以只挑某几个链接来显示分享块和二维码
 - 内置证书管理：
   - 在 `/etc/shoes/certs/` 生成自签证书
   - 用 `acme.sh` 的 standalone 模式申请 Let's Encrypt 证书
@@ -60,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel
 
 ## 依赖
 
-目标系统需具备：`curl`、`tar`、`systemctl`（Debian/Ubuntu 默认已有）。`fzf` 为可选依赖，使用多选删除时 panel 会提示安装；`qrencode` 也是可选依赖，安装后新增协议时会额外输出二维码。
+目标系统需具备：`curl`、`tar`、`systemctl`（Debian/Ubuntu 默认已有）。`fzf` 为可选依赖，删除协议和 `Share links / QR` 的多选都会优先使用它；没装时会回退成编号选择。`qrencode` 也是可选依赖，安装后新增协议和独立二维码查看时都会输出二维码。
 
 ## 客户端说明
 

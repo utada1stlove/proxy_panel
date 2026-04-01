@@ -2,6 +2,8 @@
 
 This file records the current export targets for `proxy_panel` before full live-client regression.
 
+Use the panel's `Share links / QR` menu when you need to re-open only a specific protocol URI during manual client checks.
+
 ## Target Clients
 
 | Client | Current Focus | Notes |
@@ -26,5 +28,6 @@ This file records the current export targets for `proxy_panel` before full live-
 1. Import the generated link into `Shadowrocket`.
 2. Import the same link into `v2rayN`.
 3. Import only dae-supported schemes into `dae`.
-4. Confirm handshake, website access, and no missing parameters after import.
-5. Record which client needs a protocol-specific fallback alias.
+4. Use `Share links / QR` to re-open the exact URI and QR for the protocol under test, instead of copying from the full listener list.
+5. Confirm handshake, website access, and no missing parameters after import.
+6. Record which client needs a protocol-specific fallback alias.

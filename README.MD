@@ -20,6 +20,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 - The table is now only the overview; full import links are rendered again below as separate "Share Details" blocks
 - Validates generated `shoes` config with `--dry-run` before keeping changes
 - Displays generated share links immediately after adding a protocol in a dedicated share card layout
+- Adds a dedicated `Share links / QR` menu so you can choose specific share URLs and print only their QR codes
 - Long share URLs are split at `@`, `?`, `&`, and `#` boundaries instead of being cut as a single raw line
 - Stores multiple import URLs when a protocol benefits from compatibility aliases (for example `hysteria2://` + `hy2://`)
 - Share blocks now print a single raw URL line for direct copy instead of inserting hard line breaks into the link itself
@@ -27,6 +28,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 - `ShadowTLS` now asks which mode you want: `shoes` native single-port mode, or Shadowrocket-style standalone mode with a separate SS2022 backend port
 - SIP002 export has been tightened: classic Shadowsocks uses Base64URL userinfo, while AEAD-2022 exports plain percent-encoded `method:password`
 - `Remove protocol` uses `fzf` multi-select: press `Tab` to mark listeners, then `Enter` to delete them in batch
+- `Share links / QR` also supports multi-select; with `fzf` installed you can pick one or more links and print just those share cards and QR codes
 - Manages TLS certificates:
   - create self-signed certs under `/etc/shoes/certs/`
   - issue Let's Encrypt certs with `acme.sh` standalone mode
@@ -60,7 +62,7 @@ wget -c https://raw.githubusercontent.com/utada1stlove/proxy_panel/main/panel.sh
 
 ## Requirements
 
-`curl`, `tar`, `systemctl` — all present by default on Debian/Ubuntu. `fzf` is optional and the panel can offer to install it when multi-select removal is used. `qrencode` is optional; when present, the panel prints QR codes for newly generated share links.
+`curl`, `tar`, `systemctl` — all present by default on Debian/Ubuntu. `fzf` is optional and is used for Tab multi-select in both listener deletion and `Share links / QR`; without it the panel falls back to numbered selection. `qrencode` is optional; when present, the panel prints QR codes for newly generated share links and for the dedicated QR view.
 
 ## Client Notes
 
